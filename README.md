@@ -505,7 +505,7 @@ Each `JobExecutionLog` contains:
 
 ## Demo application
 
-A complete demo Spring Boot application is available at [`simplydone4j-demo`](https://github.com/learnerview/simplydone4j/tree/main/simplydone4j-demo). It demonstrates:
+A complete demo Spring Boot application is available at [`simplydone4j-demo`](https://github.com/learnerview/simplydone4j-demo). It demonstrates:
 
 - **4 job handlers**: `quick-success`, `failing-task`, `long-running`, `callback-test`
 - **REST API**: submit, query, cancel jobs and view queue statistics
