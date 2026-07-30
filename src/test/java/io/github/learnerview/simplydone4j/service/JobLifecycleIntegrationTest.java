@@ -78,7 +78,7 @@ class JobLifecycleIntegrationTest {
 
     @Test
     void shouldSubmitAndExecuteSuccessfully() throws Exception {
-        handlerRegistry.register("test-handler", ctx -> {});
+        handlerRegistry.register("test-handler", ctx -> null);
 
         when(valueOps.setIfAbsent(anyString(), anyString(), any(java.time.Duration.class))).thenReturn(true);
         when(queueRepo.queueSize(any(JobPriority.class))).thenReturn(0L);

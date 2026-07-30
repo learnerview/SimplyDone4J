@@ -62,16 +62,16 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
             JobHandler handler = handlerRegistry.getHandler(job.getJobType());
             JobContext context = JobContext.from(job);
 
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+            CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
                 try {
-                    handler.handle(context);
+                    return handler.handle(context);
                 } catch (Exception ex) {
                     throw new RuntimeException(ex);
                 }
             }, executor);
 
-            future.get(timeoutSeconds, TimeUnit.SECONDS);
-            handleSuccess(job, System.currentTimeMillis() - start);
+            String result = future.get(timeoutSeconds, TimeUnit.SECONDS);
+            handleSuccess(job, result, System.currentTimeMillis() - start);
         } catch (TimeoutException e) {
             handleFailureWithFencing(job, "Handler timed out after " + timeoutSeconds + "s", System.currentTimeMillis() - start);
         } catch (Exception e) {
@@ -80,7 +80,7 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
         }
     }
 
-    private void handleSuccess(JobEntity originalJob, long durationMs) {
+    private void handleSuccess(JobEntity originalJob, String result, long durationMs) {
         JobEntity current = jobRepo.findById(originalJob.getId()).orElse(null);
         if (current == null) return;
         if (!fencingTokenMatches(originalJob, current)) {
@@ -89,6 +89,7 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
         }
 
         current.setStatus(JobStatus.SUCCESS);
+        current.setResult(result);
         current.setVisibleAt(null);
         current.setLeaseOwner(null);
         current.setLeaseToken(null);

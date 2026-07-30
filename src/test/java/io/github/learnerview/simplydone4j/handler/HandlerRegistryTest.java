@@ -9,7 +9,7 @@ class HandlerRegistryTest {
     @Test
     void shouldRegisterAndRetrieveHandler() {
         HandlerRegistry registry = new HandlerRegistry();
-        JobHandler handler = context -> {};
+        JobHandler handler = context -> null;
         registry.register("test", handler);
         assertSame(handler, registry.getHandler("test"));
     }
@@ -23,8 +23,8 @@ class HandlerRegistryTest {
     @Test
     void shouldReturnAllHandlers() {
         HandlerRegistry registry = new HandlerRegistry();
-        registry.register("a", context -> {});
-        registry.register("b", context -> {});
+        registry.register("a", context -> null);
+        registry.register("b", context -> null);
         assertEquals(2, registry.getHandlers().size());
     }
 }

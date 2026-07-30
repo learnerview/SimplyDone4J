@@ -79,6 +79,7 @@ class StressTest {
         executorService = createExecutorService(80, 160, 400);
         handlerRegistry.register("fast-handler", ctx -> {
             Thread.sleep(10);
+            return null;
         });
 
         int jobCount = 50;
@@ -152,6 +153,7 @@ class StressTest {
                 throw new RuntimeException("Simulated failure for job " + jobId);
             }
             Thread.sleep(5);
+            return null;
         });
 
         int jobCount = 30;
@@ -222,6 +224,7 @@ class StressTest {
         executorService = createExecutorService(80, 160, 400);
         handlerRegistry.register("variable-handler", ctx -> {
             Thread.sleep(5);
+            return null;
         });
 
         int jobCount = 10;
@@ -292,6 +295,7 @@ class StressTest {
             } else {
                 Thread.sleep(5);
             }
+            return null;
         });
 
         int jobCount = 40;
