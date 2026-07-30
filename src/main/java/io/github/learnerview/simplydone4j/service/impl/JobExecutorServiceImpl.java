@@ -26,6 +26,7 @@ import java.util.concurrent.TimeoutException;
 
 public final class JobExecutorServiceImpl implements JobExecutorService {
     private static final Logger log = LoggerFactory.getLogger(JobExecutorServiceImpl.class);
+    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
     private final JobRepository jobRepo;
     private final RetryService retryService;
@@ -50,10 +51,6 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
         int effectiveTimeout = job.getTimeoutSeconds() != null && job.getTimeoutSeconds() > 0
                 ? job.getTimeoutSeconds() : defaultTimeoutSeconds;
 
-        job.setStatus(JobStatus.RUNNING);
-        job.setStartedAt(Instant.now());
-        job.setUpdatedAt(Instant.now());
-        jobRepo.save(job);
         eventPublisher.publish(JobEvent.JOB_STARTED, JobEventData.from(job));
 
         executor.submit(() -> executeWithTimeout(job, effectiveTimeout));
@@ -124,8 +121,8 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
     }
 
     private static boolean fencingTokenMatches(JobEntity original, JobEntity current) {
-        if (original.getLeaseToken() == null || current.getLeaseToken() == null) return true;
-        return original.getLeaseToken().equals(current.getLeaseToken());
+        return original.getLeaseToken() != null
+            && original.getLeaseToken().equals(current.getLeaseToken());
     }
 
     private void fireCallback(JobEntity job, String outcome, String errorMessage) {
@@ -133,7 +130,6 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
         if (callbackUrl == null || callbackUrl.isBlank()) return;
 
         try {
-            HttpClient client = HttpClient.newHttpClient();
             String body = "{\"jobId\":\"" + escapeJson(job.getId())
                     + "\",\"status\":\"" + outcome
                     + "\",\"jobType\":\"" + escapeJson(job.getJobType())
@@ -145,7 +141,7 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
-            client.sendAsync(request, HttpResponse.BodyHandlers.discarding())
+            HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.discarding())
                     .exceptionally(ex -> {
                         log.warn("Callback failed for job {} to {}: {}", job.getId(), callbackUrl, ex.getMessage());
                         return null;

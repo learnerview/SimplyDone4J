@@ -1,6 +1,7 @@
 package io.github.learnerview.simplydone4j.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.entity.JobExecutionLog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,15 +13,17 @@ import java.util.UUID;
 
 public final class RedisJobExecutionLogRepository implements JobExecutionLogRepository {
     private static final Logger log = LoggerFactory.getLogger(RedisJobExecutionLogRepository.class);
-    private static final String LOG_KEY_PREFIX = "simplydone4j:log:";
     private static final int MAX_LOGS_PER_JOB = 50;
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
+    private final String logKeyPrefix;
 
-    public RedisJobExecutionLogRepository(StringRedisTemplate redis, ObjectMapper objectMapper) {
+    public RedisJobExecutionLogRepository(StringRedisTemplate redis, ObjectMapper objectMapper,
+                                           SimplyDoneProperties props) {
         this.redis = redis;
         this.objectMapper = objectMapper;
+        this.logKeyPrefix = props.getKeyPrefix() + ":log:";
     }
 
     @Override
@@ -33,6 +36,7 @@ public final class RedisJobExecutionLogRepository implements JobExecutionLogRepo
             String key = logKey(executionLog.getJobId());
             redis.opsForList().leftPush(key, json);
             redis.opsForList().trim(key, 0, MAX_LOGS_PER_JOB - 1);
+            redis.expire(key, java.time.Duration.ofDays(7));
         } catch (Exception e) {
             log.warn("Failed to save execution log for job {}: {}", executionLog.getJobId(), e.getMessage());
         }
@@ -54,5 +58,5 @@ public final class RedisJobExecutionLogRepository implements JobExecutionLogRepo
         return logs;
     }
 
-    private static String logKey(String jobId) { return LOG_KEY_PREFIX + jobId; }
+    private String logKey(String jobId) { return logKeyPrefix + jobId; }
 }

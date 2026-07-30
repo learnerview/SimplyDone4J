@@ -45,7 +45,7 @@ public final class RetryServiceImpl implements RetryService {
                 .executedAt(Instant.now())
                 .build());
 
-        if (attempt < maxAttempts) {
+        if (attempt + 1 < maxAttempts) {
             long delayMs = (long) (config.getRetry().getInitialDelaySeconds() * 1000L
                     * Math.pow(config.getRetry().getBackoffMultiplier(), attempt));
 
@@ -80,7 +80,7 @@ public final class RetryServiceImpl implements RetryService {
             job.setUpdatedAt(Instant.now());
             jobRepo.save(job);
 
-            log.warn("Job {} moved to DLQ after {} attempts", job.getId(), attempt);
+            log.warn("Job {} moved to DLQ after {} attempts", job.getId(), maxAttempts);
             eventPublisher.publish(JobEvent.JOB_FAILED, JobEventData.builder()
                     .jobId(job.getId())
                     .jobType(job.getJobType())

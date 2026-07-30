@@ -20,13 +20,20 @@ public final class RateLimiterServiceImpl implements RateLimiterService {
 
     private final StringRedisTemplate redis;
     private final SimplyDoneProperties config;
-    private final ConcurrentMap<String, int[]> fallbackCounters = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Long> fallbackResetAt = new ConcurrentHashMap<>();
+    private final String keyPrefix;
+
+    /**
+     * In-memory fallback: key → long[]{windowResetEpochMs, requestCount}
+     * Access is serialised per-key via {@link ConcurrentHashMap#compute}, which
+     * holds an exclusive lock on the bucket for the duration of the lambda.
+     */
+    private final ConcurrentMap<String, long[]> fallbackWindows = new ConcurrentHashMap<>();
     private DefaultRedisScript<List> rateLimitScript;
 
     public RateLimiterServiceImpl(StringRedisTemplate redis, SimplyDoneProperties config) {
         this.redis = redis;
         this.config = config;
+        this.keyPrefix = config.getKeyPrefix();
     }
 
     @PostConstruct
@@ -36,9 +43,10 @@ public final class RateLimiterServiceImpl implements RateLimiterService {
             rateLimitScript.setScriptSource(new org.springframework.scripting.support.ResourceScriptSource(
                     new ClassPathResource("scripts/rate_limit.lua")));
             rateLimitScript.setResultType(List.class);
+            // Eagerly load to surface I/O errors at startup rather than at first request
             rateLimitScript.getScriptAsString();
         } catch (Exception e) {
-            log.warn("Failed to load rate limit Lua script, falling back to inline logic: {}", e.getMessage());
+            log.warn("Failed to load rate limit Lua script, falling back to in-memory logic: {}", e.getMessage());
             rateLimitScript = null;
         }
     }
@@ -50,9 +58,10 @@ public final class RateLimiterServiceImpl implements RateLimiterService {
         long now = System.currentTimeMillis();
 
         try {
-            String key = "simplydone4j:ratelimit:" + producer;
+            String key = keyPrefix + ":ratelimit:" + producer;
 
             if (rateLimitScript != null) {
+                @SuppressWarnings("unchecked")
                 List<Long> results = redis.execute(rateLimitScript, List.of(key),
                         String.valueOf(now), String.valueOf(windowSeconds * 1000L),
                         String.valueOf(maxRequests));
@@ -67,7 +76,8 @@ public final class RateLimiterServiceImpl implements RateLimiterService {
                 }
                 redis.expire(key, Duration.ofSeconds(windowSeconds * 2L));
             } else {
-                useInlineSlidingWindow(key, windowSeconds, maxRequests, now);
+                log.warn("Rate limit Lua script not loaded, using in-memory fallback for producer {}", producer);
+                useFallbackRateLimit(producer, windowSeconds, maxRequests, now);
             }
         } catch (RateLimitExceededException e) {
             throw e;
@@ -77,39 +87,30 @@ public final class RateLimiterServiceImpl implements RateLimiterService {
         }
     }
 
-    private void useInlineSlidingWindow(String key, int windowSeconds, int maxRequests, long now) {
-        long windowStart = now - (windowSeconds * 1000L);
-        redis.opsForZSet().removeRangeByScore(key, 0, windowStart);
-        Long count = redis.opsForZSet().zCard(key);
-        if (count != null && count >= maxRequests) {
-            var oldest = redis.opsForZSet().rangeWithScores(key, 0, 0);
-            long oldestScore = oldest != null && !oldest.isEmpty()
-                    ? oldest.iterator().next().getScore().longValue() : windowStart;
-            long retryAfter = (oldestScore + windowSeconds * 1000L - now) / 1000L + 1;
-            throw new RateLimitExceededException(Math.max(1, retryAfter));
-        }
-        redis.opsForZSet().add(key, String.valueOf(now), now);
-        redis.expire(key, Duration.ofSeconds(windowSeconds * 2L));
-    }
-
+    /**
+     * Thread-safe in-memory sliding-window fallback.
+     * <p>
+     * Uses {@link ConcurrentHashMap#compute} which holds an exclusive lock on the
+     * entry for the duration of the lambda, making the read-modify-write atomic
+     * per producer key without a global lock.
+     */
     private void useFallbackRateLimit(String producer, int windowSeconds, int maxRequests, long now) {
-        long resetTime = now + windowSeconds * 1000L;
-        Long existingReset = fallbackResetAt.get(producer);
+        long windowEndMs = now + windowSeconds * 1000L;
 
-        if (existingReset == null || existingReset < now) {
-            Long prev = fallbackResetAt.putIfAbsent(producer, resetTime);
-            if (prev == null) {
-                fallbackCounters.put(producer, new int[]{1});
-                return;
+        // long[0] = window reset epoch ms, long[1] = request count in current window
+        long[] window = fallbackWindows.compute(producer, (k, existing) -> {
+            if (existing == null || existing[0] < now) {
+                // Start a fresh window with this request as the first
+                return new long[]{windowEndMs, 1};
             }
-            existingReset = prev;
-        }
+            existing[1]++;
+            return existing;
+        });
 
-        int[] counter = fallbackCounters.computeIfAbsent(producer, k -> new int[]{0});
-        if (++counter[0] > maxRequests) {
-            long resetAt = fallbackResetAt.getOrDefault(producer, existingReset);
-            int retryAfter = (int) ((resetAt - now) / 1000L) + 1;
-            throw new RateLimitExceededException(retryAfter);
+        if (window[1] > maxRequests) {
+            long retryAfterMs = window[0] - now;
+            long retryAfterSecs = retryAfterMs / 1000L + 1;
+            throw new RateLimitExceededException(Math.max(1, retryAfterSecs));
         }
     }
 }

@@ -2,29 +2,47 @@ package io.github.learnerview.simplydone4j.repository;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.entity.JobEntity;
 import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
 public final class RedisJobRepository implements JobRepository {
     private static final Logger log = LoggerFactory.getLogger(RedisJobRepository.class);
-    private static final String JOB_KEY_PREFIX = "simplydone4j:job:";
-    private static final String STATUS_INDEX_PREFIX = "simplydone4j:idx:status:";
-    private static final String IDEMPOTENCY_PREFIX = "simplydone4j:idempotency:";
+    private static final List<JobStatus> TERMINAL_STATUSES = List.of(
+            JobStatus.SUCCESS, JobStatus.FAILED, JobStatus.DLQ, JobStatus.CANCELLED);
+    private static final List<JobStatus> NON_TERMINAL_STATUSES = List.of(
+            JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRY_SCHEDULED);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
+    private final String jobKeyPrefix;
+    private final String statusIndexPrefix;
+    private final String statusPriorityIndexPrefix;
+    private final String idempotencyPrefix;
+    private final int ttlDays;
 
-    public RedisJobRepository(StringRedisTemplate redis, ObjectMapper objectMapper) {
+    public RedisJobRepository(StringRedisTemplate redis, ObjectMapper objectMapper,
+                               SimplyDoneProperties props) {
         this.redis = redis;
         this.objectMapper = objectMapper;
+        String kp = props.getKeyPrefix();
+        this.jobKeyPrefix = kp + ":job:";
+        this.statusIndexPrefix = kp + ":idx:status:";
+        this.statusPriorityIndexPrefix = kp + ":idx:status:priority:";
+        this.idempotencyPrefix = kp + ":idempotency:";
+        this.ttlDays = props.getTtlDays();
     }
 
     @Override
@@ -33,21 +51,32 @@ public final class RedisJobRepository implements JobRepository {
         Map<String, String> fields = objectMapper.convertValue(job, new TypeReference<>() {});
         fields.values().removeIf(v -> v == null);
         redis.opsForHash().putAll(key, fields);
-
-        if (job.getStatus() != null) {
+        if (!TERMINAL_STATUSES.contains(job.getStatus())) {
             double score;
             if (job.getStatus() == JobStatus.RUNNING && job.getVisibleAt() != null) {
                 score = job.getVisibleAt().toEpochMilli();
             } else if (job.getNextRunAt() != null) {
                 score = job.getNextRunAt().toEpochMilli();
             } else {
-                return;
+                score = System.currentTimeMillis();
+            }
+            for (JobStatus s : NON_TERMINAL_STATUSES) {
+                if (s != job.getStatus()) {
+                    redis.opsForZSet().remove(statusIndexKey(s), job.getId());
+                }
             }
             redis.opsForZSet().add(statusIndexKey(job.getStatus()), job.getId(), score);
+            if (job.getPriority() != null) {
+                for (JobStatus s : NON_TERMINAL_STATUSES) {
+                    if (s != job.getStatus()) {
+                        redis.opsForZSet().remove(statusPriorityIndexKey(s, job.getPriority()), job.getId());
+                    }
+                }
+                redis.opsForZSet().add(statusPriorityIndexKey(job.getStatus(), job.getPriority()), job.getId(), score);
+            }
         }
-
-        if (job.getProducer() != null && job.getIdempotencyKey() != null) {
-            redis.opsForValue().set(idempotencyKey(job.getProducer(), job.getIdempotencyKey()), job.getId());
+        if (TERMINAL_STATUSES.contains(job.getStatus())) {
+            redis.expire(key, Duration.ofDays(ttlDays));
         }
     }
 
@@ -75,11 +104,6 @@ public final class RedisJobRepository implements JobRepository {
     }
 
     @Override
-    public List<JobEntity> findExpiredLeases(JobStatus status, Instant before, int limit) {
-        return findReadyToRun(status, before, limit);
-    }
-
-    @Override
     public long countByStatus(JobStatus status) {
         Long size = redis.opsForZSet().zCard(statusIndexKey(status));
         return size != null ? size : 0L;
@@ -87,26 +111,75 @@ public final class RedisJobRepository implements JobRepository {
 
     @Override
     public long countByStatusAndPriority(JobStatus status, JobPriority priority) {
-        return countByStatus(status);
+        Long size = redis.opsForZSet().zCard(statusPriorityIndexKey(status, priority));
+        return size != null ? size : 0L;
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public int claimForExecution(String jobId, String leaseToken, String workerId, Instant visibleUntil,
                                   Instant now, JobStatus fromStatus, JobStatus toStatus) {
-        Optional<JobEntity> opt = findById(jobId);
-        if (opt.isEmpty()) return 0;
-        JobEntity job = opt.get();
-        if (job.getStatus() != fromStatus) return 0;
+        return redis.execute(new SessionCallback<Integer>() {
+            @Override
+            public Integer execute(RedisOperations ops) throws DataAccessException {
+                String key = jobKey(jobId);
+                ops.watch(key);
 
-        redis.opsForZSet().remove(statusIndexKey(fromStatus), jobId);
-        job.setStatus(toStatus);
-        job.setLeaseToken(leaseToken);
-        job.setLeaseOwner(workerId);
-        job.setVisibleAt(visibleUntil);
-        job.setStartedAt(now);
-        job.setUpdatedAt(now);
-        save(job);
-        return 1;
+                Map<Object, Object> entries = ops.opsForHash().entries(key);
+                if (entries.isEmpty()) {
+                    ops.unwatch();
+                    return 0;
+                }
+
+                Map<String, String> stringMap = new HashMap<>();
+                entries.forEach((k, v) -> stringMap.put((String) k, (String) v));
+                JobEntity job = objectMapper.convertValue(stringMap, JobEntity.class);
+
+                if (job.getStatus() != fromStatus) {
+                    ops.unwatch();
+                    return 0;
+                }
+
+                job.setStatus(toStatus);
+                job.setLeaseToken(leaseToken);
+                job.setLeaseOwner(workerId);
+                job.setVisibleAt(visibleUntil);
+                job.setStartedAt(now);
+                job.setUpdatedAt(now);
+
+                Map<String, String> fields = objectMapper.convertValue(job, new TypeReference<>() {});
+                fields.values().removeIf(v -> v == null);
+
+                ops.multi();
+                for (JobStatus s : JobStatus.values()) {
+                    ops.opsForZSet().remove(statusIndexKey(s), jobId);
+                    for (JobPriority p : JobPriority.values()) {
+                        ops.opsForZSet().remove(statusPriorityIndexKey(s, p), jobId);
+                    }
+                }
+                ops.opsForHash().putAll(key, fields);
+                if (TERMINAL_STATUSES.contains(toStatus)) {
+                    ops.expire(key, Duration.ofDays(ttlDays));
+                }
+                double score;
+                if (toStatus == JobStatus.RUNNING && visibleUntil != null) {
+                    score = visibleUntil.toEpochMilli();
+                } else if (job.getNextRunAt() != null) {
+                    score = job.getNextRunAt().toEpochMilli();
+                } else {
+                    ops.unwatch();
+                    return 0;
+                }
+                ops.opsForZSet().add(statusIndexKey(toStatus), jobId, score);
+                if (job.getPriority() != null) {
+                    ops.opsForZSet().add(statusPriorityIndexKey(toStatus, job.getPriority()), jobId, score);
+                }
+
+                List<Object> execResult = ops.exec();
+                if (execResult == null || execResult.isEmpty()) return 0;
+                return 1;
+            }
+        });
     }
 
     @Override
@@ -123,7 +196,8 @@ public final class RedisJobRepository implements JobRepository {
         return jobIds.stream().map(this::findById).filter(Optional::isPresent).map(Optional::get).collect(Collectors.toList());
     }
 
-    private static String jobKey(String jobId) { return JOB_KEY_PREFIX + jobId; }
-    private static String statusIndexKey(JobStatus status) { return STATUS_INDEX_PREFIX + status.name().toLowerCase(); }
-    private static String idempotencyKey(String producer, String idempotencyKey) { return IDEMPOTENCY_PREFIX + producer + ':' + idempotencyKey; }
+    private String jobKey(String jobId) { return jobKeyPrefix + jobId; }
+    private String statusIndexKey(JobStatus status) { return statusIndexPrefix + status.name().toLowerCase(); }
+    private String statusPriorityIndexKey(JobStatus status, JobPriority priority) { return statusPriorityIndexPrefix + status.name().toLowerCase() + ':' + priority.name().toLowerCase(); }
+    private String idempotencyKey(String producer, String idempotencyKey) { return idempotencyPrefix + producer + ':' + idempotencyKey; }
 }

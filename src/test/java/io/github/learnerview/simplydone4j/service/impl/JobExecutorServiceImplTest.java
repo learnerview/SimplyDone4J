@@ -60,6 +60,7 @@ class JobExecutorServiceImplTest {
                 .payload("{}")
                 .attemptCount(0)
                 .maxAttempts(3)
+                .leaseToken("tok-1")
                 .build();
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -117,6 +118,7 @@ class JobExecutorServiceImplTest {
                 .payload("{}")
                 .attemptCount(0)
                 .maxAttempts(3)
+                .leaseToken("tok-1")
                 .build();
 
         when(jobRepo.findById("job-1")).thenReturn(Optional.of(job));

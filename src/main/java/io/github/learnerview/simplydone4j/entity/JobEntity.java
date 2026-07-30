@@ -19,8 +19,6 @@ public final class JobEntity {
     private Instant visibleAt;
     private String leaseOwner;
     private String leaseToken;
-    private String executionType;
-    private String executionEndpoint;
     private Integer timeoutSeconds;
     private String callbackUrl;
     private Instant startedAt;
@@ -45,8 +43,6 @@ public final class JobEntity {
         this.visibleAt = builder.visibleAt;
         this.leaseOwner = builder.leaseOwner;
         this.leaseToken = builder.leaseToken;
-        this.executionType = builder.executionType;
-        this.executionEndpoint = builder.executionEndpoint;
         this.timeoutSeconds = builder.timeoutSeconds;
         this.callbackUrl = builder.callbackUrl;
         this.startedAt = builder.startedAt;
@@ -81,10 +77,6 @@ public final class JobEntity {
     public void setLeaseOwner(String leaseOwner) { this.leaseOwner = leaseOwner; }
     public String getLeaseToken() { return leaseToken; }
     public void setLeaseToken(String leaseToken) { this.leaseToken = leaseToken; }
-    public String getExecutionType() { return executionType; }
-    public void setExecutionType(String executionType) { this.executionType = executionType; }
-    public String getExecutionEndpoint() { return executionEndpoint; }
-    public void setExecutionEndpoint(String executionEndpoint) { this.executionEndpoint = executionEndpoint; }
     public Integer getTimeoutSeconds() { return timeoutSeconds; }
     public void setTimeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
     public String getCallbackUrl() { return callbackUrl; }
@@ -117,8 +109,6 @@ public final class JobEntity {
         private Instant visibleAt;
         private String leaseOwner;
         private String leaseToken;
-        private String executionType;
-        private String executionEndpoint;
         private Integer timeoutSeconds;
         private String callbackUrl;
         private Instant startedAt;
@@ -142,8 +132,6 @@ public final class JobEntity {
         public Builder visibleAt(Instant visibleAt) { this.visibleAt = visibleAt; return this; }
         public Builder leaseOwner(String leaseOwner) { this.leaseOwner = leaseOwner; return this; }
         public Builder leaseToken(String leaseToken) { this.leaseToken = leaseToken; return this; }
-        public Builder executionType(String executionType) { this.executionType = executionType; return this; }
-        public Builder executionEndpoint(String executionEndpoint) { this.executionEndpoint = executionEndpoint; return this; }
         public Builder timeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; return this; }
         public Builder callbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; return this; }
         public Builder startedAt(Instant startedAt) { this.startedAt = startedAt; return this; }

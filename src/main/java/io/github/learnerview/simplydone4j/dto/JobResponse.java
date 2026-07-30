@@ -15,8 +15,6 @@ public final class JobResponse {
     private final Instant nextRunAt;
     private final Instant visibleAt;
     private final String leaseOwner;
-    private final String executionType;
-    private final String executionEndpoint;
     private final Integer timeoutSeconds;
     private final String callbackUrl;
     private final Instant startedAt;
@@ -38,8 +36,6 @@ public final class JobResponse {
         this.nextRunAt = builder.nextRunAt;
         this.visibleAt = builder.visibleAt;
         this.leaseOwner = builder.leaseOwner;
-        this.executionType = builder.executionType;
-        this.executionEndpoint = builder.executionEndpoint;
         this.timeoutSeconds = builder.timeoutSeconds;
         this.callbackUrl = builder.callbackUrl;
         this.startedAt = builder.startedAt;
@@ -61,8 +57,6 @@ public final class JobResponse {
     public Instant getNextRunAt() { return nextRunAt; }
     public Instant getVisibleAt() { return visibleAt; }
     public String getLeaseOwner() { return leaseOwner; }
-    public String getExecutionType() { return executionType; }
-    public String getExecutionEndpoint() { return executionEndpoint; }
     public Integer getTimeoutSeconds() { return timeoutSeconds; }
     public String getCallbackUrl() { return callbackUrl; }
     public Instant getStartedAt() { return startedAt; }
@@ -86,8 +80,6 @@ public final class JobResponse {
         private Instant nextRunAt;
         private Instant visibleAt;
         private String leaseOwner;
-        private String executionType;
-        private String executionEndpoint;
         private Integer timeoutSeconds;
         private String callbackUrl;
         private Instant startedAt;
@@ -108,8 +100,6 @@ public final class JobResponse {
         public Builder nextRunAt(Instant nextRunAt) { this.nextRunAt = nextRunAt; return this; }
         public Builder visibleAt(Instant visibleAt) { this.visibleAt = visibleAt; return this; }
         public Builder leaseOwner(String leaseOwner) { this.leaseOwner = leaseOwner; return this; }
-        public Builder executionType(String executionType) { this.executionType = executionType; return this; }
-        public Builder executionEndpoint(String executionEndpoint) { this.executionEndpoint = executionEndpoint; return this; }
         public Builder timeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; return this; }
         public Builder callbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; return this; }
         public Builder startedAt(Instant startedAt) { this.startedAt = startedAt; return this; }

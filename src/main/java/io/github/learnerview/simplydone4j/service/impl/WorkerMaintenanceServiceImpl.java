@@ -33,26 +33,36 @@ public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceServ
     @Scheduled(fixedDelayString = "${simplydone4j.worker.retry-promoter-interval-ms:1000}")
     @Override
     public void promoteRetries() {
-        Instant now = Instant.now();
-        List<JobEntity> due = jobRepo.findReadyToRun(JobStatus.RETRY_SCHEDULED, now, 100);
+        try {
+            Instant now = Instant.now();
+            List<JobEntity> due = jobRepo.findReadyToRun(JobStatus.RETRY_SCHEDULED, now, 100);
 
-        for (JobEntity job : due) {
-            job.setStatus(JobStatus.QUEUED);
-            job.setUpdatedAt(now);
-            jobRepo.save(job);
-            queueRepo.enqueue(job.getId(), job.getPriority(), job.getNextRunAt().toEpochMilli());
+            for (JobEntity job : due) {
+                job.setStatus(JobStatus.QUEUED);
+                job.setUpdatedAt(now);
+                jobRepo.save(job);
+                queueRepo.enqueue(job.getId(), job.getPriority(), job.getNextRunAt().toEpochMilli());
+            }
+        } catch (Exception e) {
+            log.error("Retry promoter failed", e);
         }
     }
 
     @Scheduled(fixedDelayString = "${simplydone4j.worker.lease-reaper-interval-ms:5000}")
     @Override
     public void recoverExpiredLeases() {
-        Instant now = Instant.now();
-        List<JobEntity> expired = jobRepo.findExpiredLeases(JobStatus.RUNNING, now, 100);
+        try {
+            Instant now = Instant.now();
+            List<JobEntity> expired = jobRepo.findReadyToRun(JobStatus.RUNNING, now, 100);
 
-        for (JobEntity job : expired) {
-            log.warn("Recovering expired lease for job {}", job.getId());
-            retryService.handleFailure(job, "Worker lease expired", 0L);
+            for (JobEntity job : expired) {
+                JobEntity current = jobRepo.findById(job.getId()).orElse(null);
+                if (current == null || current.getStatus() != JobStatus.RUNNING) continue;
+                log.warn("Recovering expired lease for job {}", job.getId());
+                retryService.handleFailure(current, "Worker lease expired", 0L);
+            }
+        } catch (Exception e) {
+            log.error("Lease reaper failed", e);
         }
     }
 }
