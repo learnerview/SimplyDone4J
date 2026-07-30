@@ -11,9 +11,7 @@ public final class QueueStatsResponse {
     private final long totalDlq;
     private final long totalProcessed;
     private final double successRate;
-    private final double retryRate;
-    private final double throughputPerMinute;
-    private final double avgLatencyMs;
+    private final double inFlightRetryRate;
 
     private QueueStatsResponse(Builder builder) {
         this.highQueueSize = builder.highQueueSize;
@@ -26,9 +24,7 @@ public final class QueueStatsResponse {
         this.totalDlq = builder.totalDlq;
         this.totalProcessed = builder.totalProcessed;
         this.successRate = builder.successRate;
-        this.retryRate = builder.retryRate;
-        this.throughputPerMinute = builder.throughputPerMinute;
-        this.avgLatencyMs = builder.avgLatencyMs;
+        this.inFlightRetryRate = builder.inFlightRetryRate;
     }
 
     public long getHighQueueSize() { return highQueueSize; }
@@ -41,9 +37,7 @@ public final class QueueStatsResponse {
     public long getTotalDlq() { return totalDlq; }
     public long getTotalProcessed() { return totalProcessed; }
     public double getSuccessRate() { return successRate; }
-    public double getRetryRate() { return retryRate; }
-    public double getThroughputPerMinute() { return throughputPerMinute; }
-    public double getAvgLatencyMs() { return avgLatencyMs; }
+    public double getInFlightRetryRate() { return inFlightRetryRate; }
 
     public static Builder builder() { return new Builder(); }
 
@@ -58,9 +52,7 @@ public final class QueueStatsResponse {
         private long totalDlq;
         private long totalProcessed;
         private double successRate;
-        private double retryRate;
-        private double throughputPerMinute;
-        private double avgLatencyMs;
+        private double inFlightRetryRate;
         private Builder() {}
         public Builder highQueueSize(long v) { this.highQueueSize = v; return this; }
         public Builder normalQueueSize(long v) { this.normalQueueSize = v; return this; }
@@ -72,9 +64,7 @@ public final class QueueStatsResponse {
         public Builder totalDlq(long v) { this.totalDlq = v; return this; }
         public Builder totalProcessed(long v) { this.totalProcessed = v; return this; }
         public Builder successRate(double v) { this.successRate = v; return this; }
-        public Builder retryRate(double v) { this.retryRate = v; return this; }
-        public Builder throughputPerMinute(double v) { this.throughputPerMinute = v; return this; }
-        public Builder avgLatencyMs(double v) { this.avgLatencyMs = v; return this; }
+        public Builder inFlightRetryRate(double v) { this.inFlightRetryRate = v; return this; }
         public QueueStatsResponse build() { return new QueueStatsResponse(this); }
     }
 }

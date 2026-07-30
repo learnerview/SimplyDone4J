@@ -44,29 +44,33 @@ public final class SchedulerEngine implements SchedulerService {
         this.workerId = "worker-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
-    @Scheduled(fixedDelayString = "${simplydone4j.scheduler.polling-interval-ms:1000}")
+    @Scheduled(initialDelay = 2000, fixedDelayString = "${simplydone4j.scheduler.polling-interval-ms:1000}")
     @Override
     public void poll() {
-        for (int i = 0; i < PRIORITIES.length; i++) {
-            deficit[i] += weights[i];
-        }
-
-        int bestIdx = -1;
-        int bestDeficit = Integer.MIN_VALUE;
-        for (int i = 0; i < PRIORITIES.length; i++) {
-            if (deficit[i] > bestDeficit && queueRepo.queueSize(PRIORITIES[i]) > 0) {
-                bestDeficit = deficit[i];
-                bestIdx = i;
+        try {
+            for (int i = 0; i < PRIORITIES.length; i++) {
+                deficit[i] += weights[i];
             }
+
+            int bestIdx = -1;
+            int bestDeficit = Integer.MIN_VALUE;
+            for (int i = 0; i < PRIORITIES.length; i++) {
+                if (deficit[i] > bestDeficit && queueRepo.queueSize(PRIORITIES[i]) > 0) {
+                    bestDeficit = deficit[i];
+                    bestIdx = i;
+                }
+            }
+
+            if (bestIdx == -1) return;
+
+            Optional<String> claimed = queueRepo.claimNextReady(PRIORITIES[bestIdx]);
+            if (claimed.isEmpty()) return;
+
+            deficit[bestIdx] -= totalWeight;
+            executeClaimedJob(claimed.get());
+        } catch (Exception e) {
+            log.error("Scheduler poll failed", e);
         }
-
-        if (bestIdx == -1) return;
-
-        Optional<String> claimed = queueRepo.claimNextReady(PRIORITIES[bestIdx]);
-        if (claimed.isEmpty()) return;
-
-        deficit[bestIdx] -= totalWeight;
-        executeClaimedJob(claimed.get());
     }
 
     private void executeClaimedJob(String jobId) {

@@ -1,0 +1,196 @@
+{
+  "groups": [
+    {
+      "name": "simplydone4j.scheduler",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Scheduler",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.scheduler.weights",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Scheduler$Weights",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.rate-limit",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$RateLimit",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.retry",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Retry",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.worker",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Worker",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.queue",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Queue",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.executor",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Executor",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.monitoring",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Monitoring",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    }
+  ],
+  "properties": [
+    {
+      "name": "simplydone4j.scheduler.enabled",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Enable the scheduler engine and worker maintenance services. Set to false for submission-only nodes that delegate job execution elsewhere."
+    },
+    {
+      "name": "simplydone4j.scheduler.polling-interval-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 1000,
+      "description": "Polling interval for the scheduler in milliseconds."
+    },
+    {
+      "name": "simplydone4j.scheduler.queue-prefix",
+      "type": "java.lang.String",
+      "defaultValue": "simplydone4j:queue",
+      "description": "Redis key prefix for queue sorted sets."
+    },
+    {
+      "name": "simplydone4j.scheduler.weights.high",
+      "type": "java.lang.Integer",
+      "defaultValue": 70,
+      "description": "Weight for high-priority queue in deficit round-robin."
+    },
+    {
+      "name": "simplydone4j.scheduler.weights.normal",
+      "type": "java.lang.Integer",
+      "defaultValue": 20,
+      "description": "Weight for normal-priority queue in deficit round-robin."
+    },
+    {
+      "name": "simplydone4j.scheduler.weights.low",
+      "type": "java.lang.Integer",
+      "defaultValue": 10,
+      "description": "Weight for low-priority queue in deficit round-robin."
+    },
+    {
+      "name": "simplydone4j.rate-limit.requests-per-minute",
+      "type": "java.lang.Integer",
+      "defaultValue": 60,
+      "description": "Maximum requests per minute per producer."
+    },
+    {
+      "name": "simplydone4j.rate-limit.window-seconds",
+      "type": "java.lang.Integer",
+      "defaultValue": 60,
+      "description": "Rate limit sliding window in seconds."
+    },
+    {
+      "name": "simplydone4j.retry.max-attempts",
+      "type": "java.lang.Integer",
+      "defaultValue": 3,
+      "description": "Maximum retry attempts before job moves to DLQ."
+    },
+    {
+      "name": "simplydone4j.retry.initial-delay-seconds",
+      "type": "java.lang.Integer",
+      "defaultValue": 5,
+      "description": "Initial delay before first retry in seconds."
+    },
+    {
+      "name": "simplydone4j.retry.backoff-multiplier",
+      "type": "java.lang.Double",
+      "defaultValue": 2.0,
+      "description": "Exponential backoff multiplier for retry delays."
+    },
+    {
+      "name": "simplydone4j.worker.lease-timeout-seconds",
+      "type": "java.lang.Integer",
+      "defaultValue": 30,
+      "description": "Lease timeout for running jobs in seconds."
+    },
+    {
+      "name": "simplydone4j.worker.retry-promoter-interval-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 1000,
+      "description": "Interval for promoting retry-scheduled jobs back to queue."
+    },
+    {
+      "name": "simplydone4j.worker.lease-reaper-interval-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 5000,
+      "description": "Interval for recovering expired leases."
+    },
+    {
+      "name": "simplydone4j.queue.max-depth",
+      "type": "java.lang.Long",
+      "defaultValue": 10000,
+      "description": "Maximum total queue depth across all priorities."
+    },
+    {
+      "name": "simplydone4j.executor.core-pool-size",
+      "type": "java.lang.Integer",
+      "defaultValue": 4,
+      "description": "Core thread pool size for job execution."
+    },
+    {
+      "name": "simplydone4j.executor.max-pool-size",
+      "type": "java.lang.Integer",
+      "defaultValue": 8,
+      "description": "Maximum thread pool size for job execution."
+    },
+    {
+      "name": "simplydone4j.executor.queue-capacity",
+      "type": "java.lang.Integer",
+      "defaultValue": 100,
+      "description": "Executor work queue capacity."
+    },
+    {
+      "name": "simplydone4j.executor.keep-alive-seconds",
+      "type": "java.lang.Integer",
+      "defaultValue": 60,
+      "description": "Keep-alive time for idle threads in seconds."
+    },
+    {
+      "name": "simplydone4j.executor.default-timeout-seconds",
+      "type": "java.lang.Integer",
+      "defaultValue": 30,
+      "description": "Default timeout for job handler execution."
+    },
+    {
+      "name": "simplydone4j.executor.await-termination-seconds",
+      "type": "java.lang.Integer",
+      "defaultValue": 30,
+      "description": "Seconds to wait for thread pool to terminate on shutdown."
+    },
+    {
+      "name": "simplydone4j.key-prefix",
+      "type": "java.lang.String",
+      "defaultValue": "simplydone4j",
+      "description": "Global Redis key prefix for all SimplyDone4J data."
+    },
+    {
+      "name": "simplydone4j.ttl-days",
+      "type": "java.lang.Integer",
+      "defaultValue": 30,
+      "description": "TTL in days for finished (success/failed/DLQ/cancelled) job data."
+    },
+    {
+      "name": "simplydone4j.idempotency-ttl-hours",
+      "type": "java.lang.Integer",
+      "defaultValue": 1,
+      "description": "TTL in hours for idempotency lock entries."
+    },
+    {
+      "name": "simplydone4j.monitoring.enabled",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Enable the monitoring service."
+    }
+  ]
+}

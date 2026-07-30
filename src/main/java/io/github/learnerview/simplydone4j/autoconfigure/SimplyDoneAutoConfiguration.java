@@ -1,8 +1,6 @@
 package io.github.learnerview.simplydone4j.autoconfigure;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties.Executor;
 import io.github.learnerview.simplydone4j.event.JobEventPublisher;
 import io.github.learnerview.simplydone4j.handler.HandlerRegistry;
@@ -22,87 +20,55 @@ import io.github.learnerview.simplydone4j.service.SchedulerService;
 import io.github.learnerview.simplydone4j.service.WorkerMaintenanceService;
 import io.github.learnerview.simplydone4j.service.impl.JobExecutorServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.JobSubmissionServiceImpl;
+import io.github.learnerview.simplydone4j.service.impl.MonitoringServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.RateLimiterServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.RetryServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.SchedulerEngine;
 import io.github.learnerview.simplydone4j.service.impl.WorkerMaintenanceServiceImpl;
 import jakarta.validation.Validator;
-import jakarta.validation.Validator;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Profile;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import java.net.URI;
-import java.time.Duration;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ThreadPoolExecutor;
 
-@AutoConfiguration
+/**
+ * Spring Boot auto-configuration for SimplyDone4J.
+ *
+ * <p>All beans are guarded with {@code @ConditionalOnMissingBean} so application
+ * developers can override any component simply by declaring their own bean of the
+ * same type.</p>
+ *
+ * <p>This configuration runs after {@link JacksonAutoConfiguration} and
+ * {@link RedisAutoConfiguration} to ensure those foundational beans are available
+ * for injection.</p>
+ */
+@AutoConfiguration(afterName = {
+        "org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration",
+        "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration"
+})
 @EnableConfigurationProperties(SimplyDoneProperties.class)
 @EnableScheduling
+@ConditionalOnClass({StringRedisTemplate.class})
 public final class SimplyDoneAutoConfiguration {
 
-    @Bean
-    @ConditionalOnMissingBean
-    public ObjectMapper objectMapper() {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new JavaTimeModule());
-        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mapper.setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
-        return mapper;
-    }
+    // ObjectMapper is intentionally NOT declared here.
+    // Spring Boot's JacksonAutoConfiguration provides a correctly configured one,
+    // and this configuration runs after it (see @AutoConfiguration(after=...)).
 
     @Bean
     @ConditionalOnMissingBean
-    public RedisConnectionFactory redisConnectionFactory(
-            @Value("${spring.data.redis.url:redis://localhost:6379}") String redisUrl) {
-        String url = redisUrl;
-        if (url == null || url.isBlank()) {
-            url = "redis://localhost:6379";
-        }
-        String envUrl = System.getenv("REDIS_URL");
-        if (envUrl != null && !envUrl.isBlank()) {
-            url = envUrl;
-        }
-        boolean useSsl = url.startsWith("rediss://");
-        String normalized = useSsl ? url.replaceFirst("rediss://", "redis://") : url;
-        URI uri = URI.create(normalized);
-
-        RedisStandaloneConfiguration serverConfig = new RedisStandaloneConfiguration();
-        serverConfig.setHostName(uri.getHost());
-        serverConfig.setPort(uri.getPort() > 0 ? uri.getPort() : 6379);
-
-        if (uri.getUserInfo() != null) {
-            String[] userInfo = uri.getUserInfo().split(":", 2);
-            if (userInfo.length == 2) {
-                serverConfig.setUsername(userInfo[0]);
-                serverConfig.setPassword(userInfo[1]);
-            } else if (userInfo.length == 1) {
-                serverConfig.setPassword(userInfo[0]);
-            }
-        }
-
-        return new LettuceConnectionFactory(
-                serverConfig,
-                LettuceClientConfiguration.builder()
-                        .commandTimeout(Duration.ofSeconds(2))
-                        .build()
-        );
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    public StringRedisTemplate stringRedisTemplate(RedisConnectionFactory connectionFactory) {
+    public StringRedisTemplate stringRedisTemplate(
+            org.springframework.data.redis.connection.RedisConnectionFactory connectionFactory) {
         return new StringRedisTemplate(connectionFactory);
     }
 
@@ -117,6 +83,9 @@ public final class SimplyDoneAutoConfiguration {
         executor.setKeepAliveSeconds(exec.getKeepAliveSeconds());
         executor.setThreadNamePrefix("sd4j-worker-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(exec.getAwaitTerminationSeconds());
+        RejectedExecutionHandler handler = new ThreadPoolExecutor.CallerRunsPolicy();
+        executor.setRejectedExecutionHandler(handler);
         executor.initialize();
         return executor;
     }
@@ -129,14 +98,17 @@ public final class SimplyDoneAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public JobRepository jobRepository(StringRedisTemplate redis, ObjectMapper objectMapper) {
-        return new RedisJobRepository(redis, objectMapper);
+    public JobRepository jobRepository(StringRedisTemplate redis, ObjectMapper objectMapper,
+                                        SimplyDoneProperties props) {
+        return new RedisJobRepository(redis, objectMapper, props);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    public JobExecutionLogRepository jobExecutionLogRepository(StringRedisTemplate redis, ObjectMapper objectMapper) {
-        return new RedisJobExecutionLogRepository(redis, objectMapper);
+    public JobExecutionLogRepository jobExecutionLogRepository(StringRedisTemplate redis,
+                                                                ObjectMapper objectMapper,
+                                                                SimplyDoneProperties props) {
+        return new RedisJobExecutionLogRepository(redis, objectMapper, props);
     }
 
     @Bean
@@ -175,7 +147,8 @@ public final class SimplyDoneAutoConfiguration {
     public JobSubmissionService jobSubmissionService(JobRepository jobRepo, QueueRepository queueRepo,
                                                       RateLimiterService rateLimiter, SimplyDoneProperties props,
                                                       JobMapper jobMapper, JobEventPublisher eventPublisher,
-                                                      StringRedisTemplate redis, ObjectProvider<Validator> validatorProvider) {
+                                                      StringRedisTemplate redis,
+                                                      ObjectProvider<Validator> validatorProvider) {
         Validator validator = validatorProvider.getIfAvailable(() ->
                 jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator());
         return new JobSubmissionServiceImpl(jobRepo, queueRepo, rateLimiter, props, jobMapper, eventPublisher,
@@ -185,15 +158,18 @@ public final class SimplyDoneAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public JobExecutorService jobExecutorService(JobRepository jobRepo, RetryService retryService,
-                                                  HandlerRegistry handlerRegistry, JobEventPublisher eventPublisher,
-                                                  ThreadPoolTaskExecutor jobTaskExecutor, SimplyDoneProperties props) {
+                                                  HandlerRegistry handlerRegistry,
+                                                  JobEventPublisher eventPublisher,
+                                                  ThreadPoolTaskExecutor jobTaskExecutor,
+                                                  SimplyDoneProperties props) {
         return new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher,
                 jobTaskExecutor, props.getExecutor().getDefaultTimeoutSeconds());
     }
 
     @Bean
-    @Profile("worker")
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "simplydone4j.scheduler", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
     public SchedulerService schedulerEngine(QueueRepository queueRepo, JobRepository jobRepo,
                                              JobExecutorService jobExecutor, SimplyDoneProperties props) {
         return new SchedulerEngine(queueRepo, jobRepo, jobExecutor, props);
@@ -201,16 +177,20 @@ public final class SimplyDoneAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "simplydone4j.monitoring", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
     public MonitoringService monitoringService(JobRepository jobRepo, QueueRepository queueRepo,
-                                                JobExecutionLogRepository logRepo) {
-        return new MonitoringService(jobRepo, queueRepo, logRepo);
+                                               JobExecutionLogRepository logRepo) {
+        return new MonitoringServiceImpl(jobRepo, queueRepo, logRepo);
     }
 
     @Bean
-    @Profile("worker")
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "simplydone4j.scheduler", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
     public WorkerMaintenanceService workerMaintenanceService(JobRepository jobRepo, QueueRepository queueRepo,
-                                                              RetryService retryService, SimplyDoneProperties props) {
+                                                              RetryService retryService,
+                                                              SimplyDoneProperties props) {
         return new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService, props);
     }
 }

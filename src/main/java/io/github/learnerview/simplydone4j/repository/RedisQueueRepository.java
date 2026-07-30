@@ -36,6 +36,7 @@ public final class RedisQueueRepository implements QueueRepository {
 
         return redis.execute(new SessionCallback<>() {
             @Override
+            @SuppressWarnings("unchecked")
             public Optional<String> execute(RedisOperations ops) throws DataAccessException {
                 ops.watch(key);
                 Set<ZSetOperations.TypedTuple<String>> results =

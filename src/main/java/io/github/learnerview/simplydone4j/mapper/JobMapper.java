@@ -31,8 +31,6 @@ public final class JobMapper {
                 .nextRunAt(job.getNextRunAt())
                 .visibleAt(job.getVisibleAt())
                 .leaseOwner(job.getLeaseOwner())
-                .executionType(job.getExecutionType())
-                .executionEndpoint(job.getExecutionEndpoint())
                 .timeoutSeconds(job.getTimeoutSeconds())
                 .callbackUrl(job.getCallbackUrl())
                 .startedAt(job.getStartedAt())

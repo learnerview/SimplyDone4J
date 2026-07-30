@@ -13,7 +13,6 @@ public interface JobRepository {
     Optional<JobEntity> findById(String jobId);
     Optional<JobEntity> findByProducerAndIdempotencyKey(String producer, String idempotencyKey);
     List<JobEntity> findReadyToRun(JobStatus status, Instant before, int limit);
-    List<JobEntity> findExpiredLeases(JobStatus status, Instant before, int limit);
     long countByStatus(JobStatus status);
     long countByStatusAndPriority(JobStatus status, JobPriority priority);
     int claimForExecution(String jobId, String leaseToken, String workerId, Instant visibleUntil, Instant now, JobStatus fromStatus, JobStatus toStatus);

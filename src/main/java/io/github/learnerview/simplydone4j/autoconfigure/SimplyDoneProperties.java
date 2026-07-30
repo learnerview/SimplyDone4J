@@ -11,6 +11,10 @@ public final class SimplyDoneProperties {
     private final Worker worker = new Worker();
     private final Queue queue = new Queue();
     private final Executor executor = new Executor();
+    private final Monitoring monitoring = new Monitoring();
+    private int ttlDays = 30;
+    private int idempotencyTtlHours = 1;
+    private String keyPrefix = "simplydone4j";
 
     public Scheduler getScheduler() { return scheduler; }
     public RateLimit getRateLimit() { return rateLimit; }
@@ -18,6 +22,13 @@ public final class SimplyDoneProperties {
     public Worker getWorker() { return worker; }
     public Queue getQueue() { return queue; }
     public Executor getExecutor() { return executor; }
+    public Monitoring getMonitoring() { return monitoring; }
+    public int getTtlDays() { return ttlDays; }
+    public void setTtlDays(int ttlDays) { this.ttlDays = ttlDays; }
+    public int getIdempotencyTtlHours() { return idempotencyTtlHours; }
+    public void setIdempotencyTtlHours(int idempotencyTtlHours) { this.idempotencyTtlHours = idempotencyTtlHours; }
+    public String getKeyPrefix() { return keyPrefix; }
+    public void setKeyPrefix(String keyPrefix) { this.keyPrefix = keyPrefix; }
 
     public static final class Scheduler {
         private long pollingIntervalMs = 1000L;
@@ -88,6 +99,7 @@ public final class SimplyDoneProperties {
         private int queueCapacity = 100;
         private int keepAliveSeconds = 60;
         private int defaultTimeoutSeconds = 30;
+        private int awaitTerminationSeconds = 30;
         public int getCorePoolSize() { return corePoolSize; }
         public void setCorePoolSize(int corePoolSize) { this.corePoolSize = corePoolSize; }
         public int getMaxPoolSize() { return maxPoolSize; }
@@ -98,5 +110,13 @@ public final class SimplyDoneProperties {
         public void setKeepAliveSeconds(int keepAliveSeconds) { this.keepAliveSeconds = keepAliveSeconds; }
         public int getDefaultTimeoutSeconds() { return defaultTimeoutSeconds; }
         public void setDefaultTimeoutSeconds(int defaultTimeoutSeconds) { this.defaultTimeoutSeconds = defaultTimeoutSeconds; }
+        public int getAwaitTerminationSeconds() { return awaitTerminationSeconds; }
+        public void setAwaitTerminationSeconds(int awaitTerminationSeconds) { this.awaitTerminationSeconds = awaitTerminationSeconds; }
+    }
+
+    public static final class Monitoring {
+        private boolean enabled = true;
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
     }
 }

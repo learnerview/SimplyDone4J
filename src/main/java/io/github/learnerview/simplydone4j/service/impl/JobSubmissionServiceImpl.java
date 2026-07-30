@@ -24,12 +24,11 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 public final class JobSubmissionServiceImpl implements JobSubmissionService {
     private static final Logger log = LoggerFactory.getLogger(JobSubmissionServiceImpl.class);
     private static final JobPriority[] PRIORITIES = JobPriority.values();
-    private static final String IDEMPOTENCY_PREFIX = "simplydone4j:idempotency:";
+    private final String keyPrefix;
 
     private final JobRepository jobRepo;
     private final QueueRepository queueRepo;
@@ -52,6 +51,7 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
         this.eventPublisher = eventPublisher;
         this.redis = redis;
         this.validator = validator;
+        this.keyPrefix = config.getKeyPrefix();
     }
 
     @Override
@@ -60,6 +60,9 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
         if (!violations.isEmpty()) {
             throw new IllegalArgumentException("Validation failed: " + violations);
         }
+        if (producer == null || producer.isBlank()) {
+            throw new IllegalArgumentException("producer must not be null or blank");
+        }
 
         rateLimiter.checkRateLimit(producer);
 
@@ -67,13 +70,14 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
             throw new QueueFullException(config.getQueue().getMaxDepth());
         }
 
+        String jobId = UUID.randomUUID().toString();
         String idempotencyKey = idempotencyRedisKey(producer, req.getIdempotencyKey());
-        Boolean acquired = redis.opsForValue().setIfAbsent(idempotencyKey, "pending",
-                java.time.Duration.ofHours(1));
+        Boolean acquired = redis.opsForValue().setIfAbsent(idempotencyKey, jobId,
+                java.time.Duration.ofHours(config.getIdempotencyTtlHours()));
         if (Boolean.FALSE.equals(acquired)) {
-            String jobId = redis.opsForValue().get(idempotencyKey);
-            if (jobId != null && !"pending".equals(jobId)) {
-                JobEntity existing = jobRepo.findById(jobId).orElse(null);
+            String existingJobId = redis.opsForValue().get(idempotencyKey);
+            if (existingJobId != null) {
+                JobEntity existing = jobRepo.findById(existingJobId).orElse(null);
                 if (existing != null) {
                     return JobSubmissionResponse.builder()
                             .jobId(existing.getId())
@@ -90,7 +94,6 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
 
         JobPriority priority = jobMapper.parsePriority(req.getPriority());
         Instant nextRunAt = req.getNextRunAt() != null ? req.getNextRunAt() : Instant.now();
-        String jobId = UUID.randomUUID().toString();
         Instant now = Instant.now();
 
         JobEntity job = JobEntity.builder()
@@ -111,8 +114,6 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
 
         jobRepo.save(job);
         queueRepo.enqueue(jobId, priority, nextRunAt.toEpochMilli());
-
-        redis.opsForValue().set(idempotencyKey, jobId, java.time.Duration.ofHours(1));
 
         log.info("Job submitted: {} type={} priority={}", jobId, req.getJobType(), priority);
         eventPublisher.publish(JobEvent.JOB_CREATED, JobEventData.from(job));
@@ -159,7 +160,7 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
         return total;
     }
 
-    private static String idempotencyRedisKey(String producer, String idempotencyKey) {
-        return IDEMPOTENCY_PREFIX + producer + ':' + idempotencyKey;
+    private String idempotencyRedisKey(String producer, String idempotencyKey) {
+        return keyPrefix + ":idempotency:" + producer + ':' + idempotencyKey;
     }
 }
