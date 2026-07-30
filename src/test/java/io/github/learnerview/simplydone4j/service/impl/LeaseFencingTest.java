@@ -47,7 +47,7 @@ class LeaseFencingTest {
     @Test
     void shouldRejectSuccessWhenLeaseTokenIsClearedByReaper() throws Exception {
         CountDownLatch fencingCheckDone = new CountDownLatch(1);
-        handlerRegistry.register("slow-job", ctx -> { });
+        handlerRegistry.register("slow-job", ctx -> null);
 
         JobEntity originalJob = JobEntity.builder()
                 .id("job-with-expired-lease")

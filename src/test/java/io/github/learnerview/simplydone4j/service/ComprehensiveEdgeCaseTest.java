@@ -236,7 +236,7 @@ class ComprehensiveEdgeCaseTest {
 
         @Test
         void shouldHandleLeaseFencingTokenMismatch() throws Exception {
-            handlerRegistry.register("fencing-test", ctx -> {});
+            handlerRegistry.register("fencing-test", ctx -> null);
 
             JobEntity originalJob = JobEntity.builder()
                     .id("fencing-job")
@@ -392,7 +392,7 @@ class ComprehensiveEdgeCaseTest {
 
         @Test
         void shouldFireStartedEventOnExecution() {
-            handlerRegistry.register("event-start-test", ctx -> {});
+            handlerRegistry.register("event-start-test", ctx -> null);
 
             JobEntity job = JobEntity.builder()
                     .id("event-start-job")
