@@ -48,13 +48,13 @@ import java.util.concurrent.ThreadPoolExecutor;
  * developers can override any component simply by declaring their own bean of the
  * same type.</p>
  *
- * <p>This configuration runs after {@link JacksonAutoConfiguration} and
- * {@link RedisAutoConfiguration} to ensure those foundational beans are available
+ * <p>This configuration runs after JacksonAutoConfiguration and
+ * RedisAutoConfiguration to ensure those foundational beans are available
  * for injection.</p>
  */
 @AutoConfiguration(afterName = {
-        "org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration",
-        "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration"
+        "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
+        "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration"
 })
 @EnableConfigurationProperties(SimplyDoneProperties.class)
 @EnableScheduling
