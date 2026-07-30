@@ -1,17 +1,19 @@
 name: Release
-
 on:
   release:
     types: [ created ]
-
 permissions:
   contents: read
-
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
