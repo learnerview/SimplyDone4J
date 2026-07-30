@@ -13,7 +13,7 @@
 
     <groupId>io.github.learnerview</groupId>
     <artifactId>simplydone4j-spring-boot-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>jar</packaging>
 
     <name>SimplyDone4J</name>
@@ -30,9 +30,9 @@
 
     <developers>
         <developer>
-            <id>sumitshukla</id>
+            <id>learnerview</id>
             <name>Sumit Shukla</name>
-            <email>sumit@learnerview.com</email>
+            <email>sumit1202shukla@gmail.com</email>
             <url>https://github.com/sumitshukla</url>
         </developer>
     </developers>
@@ -41,7 +41,7 @@
         <connection>scm:git:git://github.com/learnerview/simplydone4j.git</connection>
         <developerConnection>scm:git:ssh://github.com/learnerview/simplydone4j.git</developerConnection>
         <url>https://github.com/learnerview/simplydone4j</url>
-        <tag>v1.0.0</tag>
+        <tag>v1.0.1</tag>
     </scm>
 
     <properties>

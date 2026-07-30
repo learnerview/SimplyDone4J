@@ -12,7 +12,7 @@ SimplyDone4J is a lightweight Java dependency (not a service) that brings reliab
 <dependency>
     <groupId>io.github.learnerview</groupId>
     <artifactId>simplydone4j-spring-boot-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 </dependency>
 ```
 
@@ -664,7 +664,7 @@ mvn clean install -DskipTests
 # Build and run the demo
 cd ../simplydone4j-demo
 mvn clean package
-java -jar target/simplydone4j-demo-1.0.0.jar
+java -jar target/simplydone4j-demo-1.0.1.jar
 ```
 
 Access `http://localhost:8080/api/jobs/stats` for queue statistics.
