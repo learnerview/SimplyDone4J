@@ -8,6 +8,7 @@ import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
 import io.github.learnerview.simplydone4j.service.RetryService;
+import io.github.learnerview.simplydone4j.service.WebhookService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,6 +30,7 @@ class JobExecutorServiceImplTest {
     @Mock JobRepository jobRepo;
     @Mock RetryService retryService;
     @Mock JobEventPublisher eventPublisher;
+    @Mock WebhookService webhookService;
 
     HandlerRegistry handlerRegistry = new HandlerRegistry();
     JobExecutorServiceImpl service;
@@ -43,7 +45,7 @@ class JobExecutorServiceImplTest {
         executor.setThreadNamePrefix("test-worker-");
         executor.initialize();
         service = new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher,
-                executor, 30);
+                webhookService, executor, 30);
     }
 
     @Test

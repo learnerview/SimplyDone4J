@@ -31,7 +31,8 @@ public final class RedisJobRepository implements JobRepository {
     private final String statusIndexPrefix;
     private final String statusPriorityIndexPrefix;
     private final String idempotencyPrefix;
-    private final int ttlDays;
+    private final boolean clearPayloadOnCompletion;
+    private final int ttlHours;
 
     public RedisJobRepository(StringRedisTemplate redis, ObjectMapper objectMapper,
                                SimplyDoneProperties props) {
@@ -42,7 +43,8 @@ public final class RedisJobRepository implements JobRepository {
         this.statusIndexPrefix = kp + ":idx:status:";
         this.statusPriorityIndexPrefix = kp + ":idx:status:priority:";
         this.idempotencyPrefix = kp + ":idempotency:";
-        this.ttlDays = props.getTtlDays();
+        this.clearPayloadOnCompletion = props.getRetention().isClearPayloadOnCompletion();
+        this.ttlHours = (props.getTtlDays() * 24) + props.getTtlHours();
     }
 
     @Override
@@ -50,6 +52,10 @@ public final class RedisJobRepository implements JobRepository {
         String key = jobKey(job.getId());
         Map<String, String> fields = objectMapper.convertValue(job, new TypeReference<>() {});
         fields.values().removeIf(v -> v == null);
+        if (clearPayloadOnCompletion && TERMINAL_STATUSES.contains(job.getStatus())) {
+            fields.remove("payload");
+            redis.opsForHash().delete(key, "payload");
+        }
         redis.opsForHash().putAll(key, fields);
         if (!TERMINAL_STATUSES.contains(job.getStatus())) {
             double score;
@@ -76,7 +82,15 @@ public final class RedisJobRepository implements JobRepository {
             }
         }
         if (TERMINAL_STATUSES.contains(job.getStatus())) {
-            redis.expire(key, Duration.ofDays(ttlDays));
+            // Purge from all non-terminal indexes so finished jobs don't linger
+            // as zombie members in unbounded ZSETs (indexes carry no TTL).
+            for (JobStatus s : NON_TERMINAL_STATUSES) {
+                redis.opsForZSet().remove(statusIndexKey(s), job.getId());
+                if (job.getPriority() != null) {
+                    redis.opsForZSet().remove(statusPriorityIndexKey(s, job.getPriority()), job.getId());
+                }
+            }
+            redis.expire(key, java.time.Duration.ofHours(ttlHours));
         }
     }
 
@@ -157,9 +171,13 @@ public final class RedisJobRepository implements JobRepository {
                         ops.opsForZSet().remove(statusPriorityIndexKey(s, p), jobId);
                     }
                 }
+                if (clearPayloadOnCompletion && TERMINAL_STATUSES.contains(toStatus)) {
+                    fields.remove("payload");
+                    ops.opsForHash().delete(key, "payload");
+                }
                 ops.opsForHash().putAll(key, fields);
                 if (TERMINAL_STATUSES.contains(toStatus)) {
-                    ops.expire(key, Duration.ofDays(ttlDays));
+                    ops.expire(key, java.time.Duration.ofHours(ttlHours));
                 }
                 double score;
                 if (toStatus == JobStatus.RUNNING && visibleUntil != null) {

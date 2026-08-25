@@ -4,7 +4,7 @@ import io.github.learnerview.simplydone4j.dto.QueueStatsResponse;
 import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobExecutionLogRepository;
-import io.github.learnerview.simplydone4j.repository.JobRepository;
+import io.github.learnerview.simplydone4j.repository.JobQueryRepository;
 import io.github.learnerview.simplydone4j.repository.QueueRepository;
 import io.github.learnerview.simplydone4j.service.MonitoringService;
 
@@ -18,11 +18,11 @@ import java.util.TreeMap;
  */
 public final class MonitoringServiceImpl implements MonitoringService {
 
-    private final JobRepository jobRepo;
+    private final JobQueryRepository jobRepo;
     private final QueueRepository queueRepo;
     private final JobExecutionLogRepository logRepo;
 
-    public MonitoringServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
+    public MonitoringServiceImpl(JobQueryRepository jobRepo, QueueRepository queueRepo,
                                  JobExecutionLogRepository logRepo) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;

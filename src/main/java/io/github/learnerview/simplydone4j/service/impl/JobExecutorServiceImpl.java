@@ -15,10 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import io.github.learnerview.simplydone4j.service.WebhookService;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -26,22 +23,24 @@ import java.util.concurrent.TimeoutException;
 
 public final class JobExecutorServiceImpl implements JobExecutorService {
     private static final Logger log = LoggerFactory.getLogger(JobExecutorServiceImpl.class);
-    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
     private final JobRepository jobRepo;
     private final RetryService retryService;
     private final HandlerRegistry handlerRegistry;
     private final JobEventPublisher eventPublisher;
+    private final WebhookService webhookService;
     private final ThreadPoolTaskExecutor executor;
     private final int defaultTimeoutSeconds;
 
     public JobExecutorServiceImpl(JobRepository jobRepo, RetryService retryService,
                                    HandlerRegistry handlerRegistry, JobEventPublisher eventPublisher,
+                                   WebhookService webhookService,
                                    ThreadPoolTaskExecutor executor, int defaultTimeoutSeconds) {
         this.jobRepo = jobRepo;
         this.retryService = retryService;
         this.handlerRegistry = handlerRegistry;
         this.eventPublisher = eventPublisher;
+        this.webhookService = webhookService;
         this.executor = executor;
         this.defaultTimeoutSeconds = defaultTimeoutSeconds;
     }
@@ -107,7 +106,7 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
                 .timestamp(Instant.now())
                 .build());
 
-        fireCallback(current, "SUCCESS", null);
+        webhookService.fireCallback(current, "SUCCESS", null);
     }
 
     private void handleFailureWithFencing(JobEntity originalJob, String errorMessage, long durationMs) {
@@ -118,43 +117,11 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
             return;
         }
         String status = retryService.handleFailure(current, errorMessage, durationMs);
-        fireCallback(current, status != null ? status : "FAILED", errorMessage);
+        webhookService.fireCallback(current, status != null ? status : "FAILED", errorMessage);
     }
 
     private static boolean fencingTokenMatches(JobEntity original, JobEntity current) {
         return original.getLeaseToken() != null
             && original.getLeaseToken().equals(current.getLeaseToken());
-    }
-
-    private void fireCallback(JobEntity job, String outcome, String errorMessage) {
-        String callbackUrl = job.getCallbackUrl();
-        if (callbackUrl == null || callbackUrl.isBlank()) return;
-
-        try {
-            String body = "{\"jobId\":\"" + escapeJson(job.getId())
-                    + "\",\"status\":\"" + outcome
-                    + "\",\"jobType\":\"" + escapeJson(job.getJobType())
-                    + "\",\"result\":" + (job.getResult() != null ? "\"" + escapeJson(job.getResult()) + "\"" : "null")
-                    + (errorMessage != null ? ",\"error\":\"" + escapeJson(errorMessage) + "\"" : "")
-                    + "}";
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(callbackUrl))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
-            HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.discarding())
-                    .exceptionally(ex -> {
-                        log.warn("Callback failed for job {} to {}: {}", job.getId(), callbackUrl, ex.getMessage());
-                        return null;
-                    });
-        } catch (Exception e) {
-            log.warn("Failed to fire callback for job {}: {}", job.getId(), e.getMessage());
-        }
-    }
-
-    private static String escapeJson(String value) {
-        if (value == null) return "";
-        return value.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
     }
 }

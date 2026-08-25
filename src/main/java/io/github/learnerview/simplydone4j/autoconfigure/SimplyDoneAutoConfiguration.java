@@ -6,25 +6,35 @@ import io.github.learnerview.simplydone4j.event.JobEventPublisher;
 import io.github.learnerview.simplydone4j.handler.HandlerRegistry;
 import io.github.learnerview.simplydone4j.mapper.JobMapper;
 import io.github.learnerview.simplydone4j.repository.JobExecutionLogRepository;
+import io.github.learnerview.simplydone4j.repository.JobQueryRepository;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
 import io.github.learnerview.simplydone4j.repository.QueueRepository;
 import io.github.learnerview.simplydone4j.repository.RedisJobExecutionLogRepository;
 import io.github.learnerview.simplydone4j.repository.RedisJobRepository;
 import io.github.learnerview.simplydone4j.repository.RedisQueueRepository;
+import io.github.learnerview.simplydone4j.service.IdempotencyService;
 import io.github.learnerview.simplydone4j.service.JobExecutorService;
 import io.github.learnerview.simplydone4j.service.JobSubmissionService;
 import io.github.learnerview.simplydone4j.service.MonitoringService;
 import io.github.learnerview.simplydone4j.service.RateLimiterService;
+import io.github.learnerview.simplydone4j.service.RetryPolicy;
 import io.github.learnerview.simplydone4j.service.RetryService;
 import io.github.learnerview.simplydone4j.service.SchedulerService;
+import io.github.learnerview.simplydone4j.service.WebhookService;
 import io.github.learnerview.simplydone4j.service.WorkerMaintenanceService;
+import io.github.learnerview.simplydone4j.service.impl.ExponentialBackoffRetryPolicy;
+import io.github.learnerview.simplydone4j.service.impl.HttpWebhookServiceImpl;
+import io.github.learnerview.simplydone4j.service.impl.InMemoryRateLimiterStrategy;
 import io.github.learnerview.simplydone4j.service.impl.JobExecutorServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.JobSubmissionServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.MonitoringServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.RateLimiterServiceImpl;
+import io.github.learnerview.simplydone4j.service.impl.RedisIdempotencyServiceImpl;
+import io.github.learnerview.simplydone4j.service.impl.RedisRateLimiterStrategy;
 import io.github.learnerview.simplydone4j.service.impl.RetryServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.SchedulerEngine;
 import io.github.learnerview.simplydone4j.service.impl.WorkerMaintenanceServiceImpl;
+import io.github.learnerview.simplydone4j.service.impl.RateLimiterCircuitBreaker;
 import jakarta.validation.Validator;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -34,10 +44,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.util.List;
 import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -132,14 +145,30 @@ public final class SimplyDoneAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public RateLimiterService rateLimiterService(StringRedisTemplate redis, SimplyDoneProperties props) {
-        return new RateLimiterServiceImpl(redis, props);
+        return new RateLimiterServiceImpl(
+                new RedisRateLimiterStrategy(redis, props),
+                new InMemoryRateLimiterStrategy(props)
+        );
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public RetryPolicy retryPolicy(SimplyDoneProperties props) {
+        return new ExponentialBackoffRetryPolicy(props);
     }
 
     @Bean
     @ConditionalOnMissingBean
     public RetryService retryService(JobRepository jobRepo, JobExecutionLogRepository logRepo,
-                                      SimplyDoneProperties props, JobEventPublisher eventPublisher) {
-        return new RetryServiceImpl(jobRepo, logRepo, props, eventPublisher);
+                                      SimplyDoneProperties props, JobEventPublisher eventPublisher,
+                                      RetryPolicy retryPolicy) {
+        return new RetryServiceImpl(jobRepo, logRepo, props, eventPublisher, retryPolicy);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public IdempotencyService idempotencyService(StringRedisTemplate redis, SimplyDoneProperties props) {
+        return new RedisIdempotencyServiceImpl(redis, props);
     }
 
     @Bean
@@ -147,23 +176,28 @@ public final class SimplyDoneAutoConfiguration {
     public JobSubmissionService jobSubmissionService(JobRepository jobRepo, QueueRepository queueRepo,
                                                       RateLimiterService rateLimiter, SimplyDoneProperties props,
                                                       JobMapper jobMapper, JobEventPublisher eventPublisher,
-                                                      StringRedisTemplate redis,
+                                                      IdempotencyService idempotencyService,
                                                       ObjectProvider<Validator> validatorProvider) {
         Validator validator = validatorProvider.getIfAvailable(() ->
                 jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator());
         return new JobSubmissionServiceImpl(jobRepo, queueRepo, rateLimiter, props, jobMapper, eventPublisher,
-                redis, validator);
+                idempotencyService, validator);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public WebhookService webhookService() {
+        return new HttpWebhookServiceImpl();
     }
 
     @Bean
     @ConditionalOnMissingBean
     public JobExecutorService jobExecutorService(JobRepository jobRepo, RetryService retryService,
-                                                  HandlerRegistry handlerRegistry,
-                                                  JobEventPublisher eventPublisher,
-                                                  ThreadPoolTaskExecutor jobTaskExecutor,
+                                                  HandlerRegistry handlerRegistry, JobEventPublisher eventPublisher,
+                                                  WebhookService webhookService, ThreadPoolTaskExecutor executor,
                                                   SimplyDoneProperties props) {
-        return new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher,
-                jobTaskExecutor, props.getExecutor().getDefaultTimeoutSeconds());
+        return new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher, webhookService,
+                executor, props.getExecutor().getDefaultTimeoutSeconds());
     }
 
     @Bean
@@ -179,7 +213,7 @@ public final class SimplyDoneAutoConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "simplydone4j.monitoring", name = "enabled",
             havingValue = "true", matchIfMissing = true)
-    public MonitoringService monitoringService(JobRepository jobRepo, QueueRepository queueRepo,
+    public MonitoringService monitoringService(JobQueryRepository jobRepo, QueueRepository queueRepo,
                                                JobExecutionLogRepository logRepo) {
         return new MonitoringServiceImpl(jobRepo, queueRepo, logRepo);
     }

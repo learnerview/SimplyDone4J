@@ -108,6 +108,8 @@ class WorkerMaintenanceServiceImplTest {
                     .status(JobStatus.RUNNING)
                     .priority(JobPriority.HIGH)
                     .visibleAt(Instant.now().minusSeconds(60))
+                    .leaseToken("old-token")
+                    .leaseOwner("old-worker")
                     .build();
 
             when(jobRepo.findReadyToRun(eq(JobStatus.RUNNING), any(Instant.class), eq(100)))
@@ -131,9 +133,9 @@ class WorkerMaintenanceServiceImplTest {
         @Test
         void shouldHandleMultipleExpiredLeases() {
             List<JobEntity> expiredJobs = List.of(
-                    JobEntity.builder().id("exp-1").jobType("test").status(JobStatus.RUNNING).build(),
-                    JobEntity.builder().id("exp-2").jobType("test").status(JobStatus.RUNNING).build(),
-                    JobEntity.builder().id("exp-3").jobType("test").status(JobStatus.RUNNING).build()
+                    JobEntity.builder().id("exp-1").jobType("test").status(JobStatus.RUNNING).leaseToken("token-1").leaseOwner("worker-1").build(),
+                    JobEntity.builder().id("exp-2").jobType("test").status(JobStatus.RUNNING).leaseToken("token-2").leaseOwner("worker-2").build(),
+                    JobEntity.builder().id("exp-3").jobType("test").status(JobStatus.RUNNING).leaseToken("token-3").leaseOwner("worker-3").build()
             );
 
             when(jobRepo.findReadyToRun(any(), any(), anyInt())).thenReturn(expiredJobs);
@@ -153,12 +155,16 @@ class WorkerMaintenanceServiceImplTest {
                     .jobType("test")
                     .status(JobStatus.RUNNING)
                     .priority(JobPriority.NORMAL)
+                    .leaseToken("old-token")
+                    .leaseOwner("old-worker")
                     .build();
             JobEntity alreadyRecovered = JobEntity.builder()
                     .id("expired-skip")
                     .jobType("test")
                     .status(JobStatus.RETRY_SCHEDULED)
                     .priority(JobPriority.NORMAL)
+                    .leaseToken("new-token")
+                    .leaseOwner("new-worker")
                     .build();
 
             when(jobRepo.findReadyToRun(any(), any(), anyInt())).thenReturn(List.of(expiredJob));
@@ -176,6 +182,8 @@ class WorkerMaintenanceServiceImplTest {
                     .jobType("test")
                     .status(JobStatus.RUNNING)
                     .priority(JobPriority.NORMAL)
+                    .leaseToken("some-token")
+                    .leaseOwner("some-worker")
                     .build();
 
             when(jobRepo.findReadyToRun(any(), any(), anyInt())).thenReturn(List.of(expiredJob));

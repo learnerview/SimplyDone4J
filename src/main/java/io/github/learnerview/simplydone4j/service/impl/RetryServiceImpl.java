@@ -9,6 +9,7 @@ import io.github.learnerview.simplydone4j.event.JobEventPublisher;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobExecutionLogRepository;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
+import io.github.learnerview.simplydone4j.service.RetryPolicy;
 import io.github.learnerview.simplydone4j.service.RetryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,13 +23,16 @@ public final class RetryServiceImpl implements RetryService {
     private final JobExecutionLogRepository logRepo;
     private final SimplyDoneProperties config;
     private final JobEventPublisher eventPublisher;
+    private final RetryPolicy retryPolicy;
 
     public RetryServiceImpl(JobRepository jobRepo, JobExecutionLogRepository logRepo,
-                             SimplyDoneProperties config, JobEventPublisher eventPublisher) {
+                             SimplyDoneProperties config, JobEventPublisher eventPublisher,
+                             RetryPolicy retryPolicy) {
         this.jobRepo = jobRepo;
         this.logRepo = logRepo;
         this.config = config;
         this.eventPublisher = eventPublisher;
+        this.retryPolicy = retryPolicy;
     }
 
     @Override
@@ -46,9 +50,7 @@ public final class RetryServiceImpl implements RetryService {
                 .build());
 
         if (attempt + 1 < maxAttempts) {
-            long delayMs = (long) (config.getRetry().getInitialDelaySeconds() * 1000L
-                    * Math.pow(config.getRetry().getBackoffMultiplier(), attempt));
-
+            long delayMs = retryPolicy.calculateDelayMs(attempt);
             Instant nextRun = Instant.now().plusMillis(delayMs);
             job.setStatus(JobStatus.RETRY_SCHEDULED);
             job.setNextRunAt(nextRun);

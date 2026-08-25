@@ -8,6 +8,7 @@ import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobExecutionLogRepository;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
+import io.github.learnerview.simplydone4j.service.RetryPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -24,13 +25,14 @@ class RetryServiceImplTest {
     @Mock JobRepository jobRepo;
     @Mock JobExecutionLogRepository logRepo;
     @Mock JobEventPublisher eventPublisher;
+    @Mock RetryPolicy retryPolicy;
 
     SimplyDoneProperties props = new SimplyDoneProperties();
     RetryServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new RetryServiceImpl(jobRepo, logRepo, props, eventPublisher);
+        service = new RetryServiceImpl(jobRepo, logRepo, props, eventPublisher, retryPolicy);
     }
 
     @Test

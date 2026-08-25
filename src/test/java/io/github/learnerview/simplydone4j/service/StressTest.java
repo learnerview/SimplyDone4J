@@ -47,8 +47,8 @@ class StressTest {
     @Mock RateLimiterService rateLimiter;
     @Mock JobEventPublisher eventPublisher;
     @Mock JobExecutionLogRepository logRepo;
-    @Mock org.springframework.data.redis.core.StringRedisTemplate redis;
-    @Mock org.springframework.data.redis.core.ValueOperations<String, String> valueOps;
+    @Mock IdempotencyService idempotencyService;
+    @Mock WebhookService webhookService;
     @Mock RetryService retryService;
 
     SimplyDoneProperties props = new SimplyDoneProperties();
@@ -58,7 +58,6 @@ class StressTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(redis.opsForValue()).thenReturn(valueOps);
         validator = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
     }
 
@@ -71,7 +70,7 @@ class StressTest {
         executor.setThreadNamePrefix("stress-worker-");
         executor.initialize();
         return new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry,
-                eventPublisher, executor, 30);
+                eventPublisher, webhookService, executor, 30);
     }
 
     @Test
