@@ -11,17 +11,15 @@ import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
 import io.github.learnerview.simplydone4j.repository.QueueRepository;
+import io.github.learnerview.simplydone4j.service.IdempotencyService;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 
 import java.util.Optional;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -35,17 +33,15 @@ class JobSubmissionServiceImplTest {
     @Mock io.github.learnerview.simplydone4j.service.RateLimiterService rateLimiter;
     @Mock JobMapper jobMapper;
     @Mock JobEventPublisher eventPublisher;
-    @Mock StringRedisTemplate redis;
-    @Mock ValueOperations<String, String> valueOps;
+    @Mock IdempotencyService idempotencyService;
 
     SimplyDoneProperties props = new SimplyDoneProperties();
     JobSubmissionServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        lenient().when(redis.opsForValue()).thenReturn(valueOps);
         service = new JobSubmissionServiceImpl(jobRepo, queueRepo, rateLimiter, props, jobMapper, eventPublisher,
-                redis, mock(Validator.class));
+                idempotencyService, mock(Validator.class));
     }
 
     @Test
@@ -54,7 +50,7 @@ class JobSubmissionServiceImplTest {
         req.setJobType("test");
         req.setIdempotencyKey("key-1");
 
-        when(valueOps.setIfAbsent(anyString(), anyString(), any(java.time.Duration.class))).thenReturn(true);
+        when(idempotencyService.acquireOrGetExisting(anyString(), anyString(), anyString())).thenReturn(Optional.empty());
         when(jobMapper.parsePriority(any())).thenReturn(JobPriority.NORMAL);
         when(jobMapper.serializePayload(any())).thenReturn("{}");
         when(queueRepo.queueSize(any())).thenReturn(0L);
@@ -74,9 +70,6 @@ class JobSubmissionServiceImplTest {
         req.setJobType("test");
         req.setIdempotencyKey("key-1");
 
-        when(valueOps.setIfAbsent(anyString(), anyString(), any(java.time.Duration.class))).thenReturn(false);
-        when(valueOps.get(anyString())).thenReturn("job-1");
-
         JobEntity existing = JobEntity.builder()
                 .id("job-1")
                 .jobType("test")
@@ -85,6 +78,7 @@ class JobSubmissionServiceImplTest {
                 .producer("producer-1")
                 .build();
 
+        when(idempotencyService.acquireOrGetExisting(anyString(), anyString(), anyString())).thenReturn(Optional.of("job-1"));
         when(jobRepo.findById("job-1")).thenReturn(Optional.of(existing));
 
         JobSubmissionResponse response = service.submit("producer-1", req);

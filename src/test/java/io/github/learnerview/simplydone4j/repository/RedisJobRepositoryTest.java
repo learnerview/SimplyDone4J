@@ -82,4 +82,33 @@ class RedisJobRepositoryTest {
     void shouldReturnZeroForEmptyCompoundIndex() {
         assertEquals(0, repo.countByStatusAndPriority(JobStatus.RUNNING, JobPriority.HIGH));
     }
+
+    @Test
+    void shouldPurgeTerminalJobFromAllStatusIndexes() {
+        JobEntity running = JobEntity.builder()
+                .id("leak-1")
+                .jobType("test")
+                .producer("app")
+                .status(JobStatus.RUNNING)
+                .priority(JobPriority.NORMAL)
+                .visibleAt(Instant.now().plusSeconds(30))
+                .build();
+        repo.save(running);
+        assertEquals(1, repo.countByStatus(JobStatus.RUNNING));
+        assertEquals(1, repo.countByStatusAndPriority(JobStatus.RUNNING, JobPriority.NORMAL));
+
+        JobEntity finished = JobEntity.builder()
+                .id("leak-1")
+                .jobType("test")
+                .producer("app")
+                .status(JobStatus.SUCCESS)
+                .priority(JobPriority.NORMAL)
+                .completedAt(Instant.now())
+                .build();
+        repo.save(finished);
+
+        assertEquals(0, repo.countByStatus(JobStatus.RUNNING));
+        assertEquals(0, repo.countByStatusAndPriority(JobStatus.RUNNING, JobPriority.NORMAL));
+        verify(redis).expire(startsWith("sd4j-test:job:leak-1"), any(java.time.Duration.class));
+    }
 }

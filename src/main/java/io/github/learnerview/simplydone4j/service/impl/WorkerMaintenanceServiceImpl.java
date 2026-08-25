@@ -13,6 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceService {
     private static final Logger log = LoggerFactory.getLogger(WorkerMaintenanceServiceImpl.class);
@@ -23,7 +24,7 @@ public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceServ
     private final SimplyDoneProperties config;
 
     public WorkerMaintenanceServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
-                                         RetryService retryService, SimplyDoneProperties config) {
+                                        RetryService retryService, SimplyDoneProperties config) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;
         this.retryService = retryService;
@@ -58,6 +59,23 @@ public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceServ
             for (JobEntity job : expired) {
                 JobEntity current = jobRepo.findById(job.getId()).orElse(null);
                 if (current == null || current.getStatus() != JobStatus.RUNNING) continue;
+
+                String leaseToken = current.getLeaseToken();
+                String leaseOwner = current.getLeaseOwner();
+
+                if (leaseToken == null || leaseOwner == null) {
+                    log.warn("Job {} has no lease token/owner, skipping recovery", job.getId());
+                    continue;
+                }
+
+                // Check if another worker already reclaimed this job
+                JobEntity competing = jobRepo.findById(job.getId()).orElse(null);
+                if (competing != null && !competing.getLeaseToken().equals(leaseToken)) {
+                    log.info("Job {} lease token mismatch - another worker may own it, triggering retry", job.getId());
+                    retryService.handleFailure(current, "Worker lease expired - competing worker", 0L);
+                    continue;
+                }
+
                 log.warn("Recovering expired lease for job {}", job.getId());
                 retryService.handleFailure(current, "Worker lease expired", 0L);
             }

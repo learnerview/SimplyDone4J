@@ -15,20 +15,20 @@ import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
 import io.github.learnerview.simplydone4j.repository.QueueRepository;
+import io.github.learnerview.simplydone4j.service.IdempotencyService;
 import io.github.learnerview.simplydone4j.service.JobSubmissionService;
 import io.github.learnerview.simplydone4j.service.RateLimiterService;
 import jakarta.validation.Validator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class JobSubmissionServiceImpl implements JobSubmissionService {
     private static final Logger log = LoggerFactory.getLogger(JobSubmissionServiceImpl.class);
     private static final JobPriority[] PRIORITIES = JobPriority.values();
-    private final String keyPrefix;
 
     private final JobRepository jobRepo;
     private final QueueRepository queueRepo;
@@ -36,22 +36,21 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
     private final SimplyDoneProperties config;
     private final JobMapper jobMapper;
     private final JobEventPublisher eventPublisher;
-    private final StringRedisTemplate redis;
+    private final IdempotencyService idempotencyService;
     private final Validator validator;
 
     public JobSubmissionServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
                                      RateLimiterService rateLimiter, SimplyDoneProperties config,
                                      JobMapper jobMapper, JobEventPublisher eventPublisher,
-                                     StringRedisTemplate redis, Validator validator) {
+                                     IdempotencyService idempotencyService, Validator validator) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;
         this.rateLimiter = rateLimiter;
         this.config = config;
         this.jobMapper = jobMapper;
         this.eventPublisher = eventPublisher;
-        this.redis = redis;
+        this.idempotencyService = idempotencyService;
         this.validator = validator;
-        this.keyPrefix = config.getKeyPrefix();
     }
 
     @Override
@@ -71,22 +70,19 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
         }
 
         String jobId = UUID.randomUUID().toString();
-        String idempotencyKey = idempotencyRedisKey(producer, req.getIdempotencyKey());
-        Boolean acquired = redis.opsForValue().setIfAbsent(idempotencyKey, jobId,
-                java.time.Duration.ofHours(config.getIdempotencyTtlHours()));
-        if (Boolean.FALSE.equals(acquired)) {
-            String existingJobId = redis.opsForValue().get(idempotencyKey);
-            if (existingJobId != null) {
-                JobEntity existing = jobRepo.findById(existingJobId).orElse(null);
-                if (existing != null) {
-                    return JobSubmissionResponse.builder()
-                            .jobId(existing.getId())
-                            .status(existing.getStatus().name())
-                            .jobType(existing.getJobType())
-                            .priority(existing.getPriority().name())
-                            .scheduledAt(existing.getNextRunAt())
-                            .build();
-                }
+        Optional<String> existingJobIdOpt = idempotencyService.acquireOrGetExisting(producer, req.getIdempotencyKey(), jobId);
+        
+        if (existingJobIdOpt.isPresent()) {
+            String existingJobId = existingJobIdOpt.get();
+            JobEntity existing = jobRepo.findById(existingJobId).orElse(null);
+            if (existing != null) {
+                return JobSubmissionResponse.builder()
+                        .jobId(existing.getId())
+                        .status(existing.getStatus().name())
+                        .jobType(existing.getJobType())
+                        .priority(existing.getPriority().name())
+                        .scheduledAt(existing.getNextRunAt())
+                        .build();
             }
             throw new IllegalStateException("Duplicate submission detected for idempotencyKey: "
                     + req.getIdempotencyKey());
@@ -158,9 +154,5 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
             total += queueRepo.queueSize(p);
         }
         return total;
-    }
-
-    private String idempotencyRedisKey(String producer, String idempotencyKey) {
-        return keyPrefix + ":idempotency:" + producer + ':' + idempotencyKey;
     }
 }
