@@ -33,7 +33,7 @@
             <id>learnerview</id>
             <name>Sumit Shukla</name>
             <email>sumit1202shukla@gmail.com</email>
-            <url>https://github.com/sumitshukla</url>
+            <url>https://github.com/learnerview</url>
         </developer>
     </developers>
 
@@ -41,7 +41,7 @@
         <connection>scm:git:git://github.com/learnerview/simplydone4j.git</connection>
         <developerConnection>scm:git:ssh://github.com/learnerview/simplydone4j.git</developerConnection>
         <url>https://github.com/learnerview/simplydone4j</url>
-        <tag>v1.0.2</tag>
+        <tag>v2.0.0</tag>
     </scm>
 
     <properties>
