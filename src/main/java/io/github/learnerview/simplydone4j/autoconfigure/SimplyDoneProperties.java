@@ -15,6 +15,7 @@ public final class SimplyDoneProperties {
     private final Executor executor = new Executor();
     private final Monitoring monitoring = new Monitoring();
     private final Retention retention = new Retention();
+    private final Redis redis = new Redis();
     private int ttlDays = 0;
     private int idempotencyTtlHours = 1;
     private int ttlHours = 1;
@@ -28,6 +29,7 @@ public final class SimplyDoneProperties {
     public Executor getExecutor() { return executor; }
     public Monitoring getMonitoring() { return monitoring; }
     public Retention getRetention() { return retention; }
+    public Redis getRedis() { return redis; }
     public int getTtlDays() { return ttlDays; }
     public void setTtlDays(int ttlDays) { this.ttlDays = ttlDays; }
     public int getIdempotencyTtlHours() { return idempotencyTtlHours; }
@@ -152,11 +154,14 @@ public final class SimplyDoneProperties {
         private String sentinelMaster;
         private List<String> sentinelNodes;
         private boolean clusterMode;
+        private String password;
         public String getSentinelMaster() { return sentinelMaster; }
         public void setSentinelMaster(String sentinelMaster) { this.sentinelMaster = sentinelMaster; }
         public List<String> getSentinelNodes() { return sentinelNodes; }
         public void setSentinelNodes(List<String> sentinelNodes) { this.sentinelNodes = sentinelNodes; }
         public boolean isClusterMode() { return clusterMode; }
         public void setClusterMode(boolean clusterMode) { this.clusterMode = clusterMode; }
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
     }
 }
