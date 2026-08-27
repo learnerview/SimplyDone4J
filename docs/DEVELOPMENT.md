@@ -26,7 +26,7 @@ mvn clean test
 REDIS_HOST=localhost REDIS_PORT=6379 mvn clean test
 ```
 
-**Test breakdown (85 tests):**
+**Test breakdown:**
 - Unit tests with Mockito: handler registry, mappers, retry policies, circuit breaker
 - Integration tests with Testcontainers: Redis repositories, auto-configuration
 - Stress tests: timeout stress, mixed load, variable duration, throughput
@@ -96,7 +96,7 @@ Access `http://localhost:8080/api/jobs/stats` for queue statistics.
 Runs on every push to `main`/`develop` and on pull requests to `main`:
 
 1. **Setup**: Java 21, Maven cache
-2. **Build**: `mvn clean verify` (compiles, runs all 85 tests with Testcontainers)
+2. **Build**: `mvn clean verify` (compiles, runs all tests with Testcontainers)
 3. **Enforce**: Java 21 / Maven 3.8+ via enforcer plugin
 
 ---
@@ -160,7 +160,7 @@ SimplyDone4J/
 │   │       ├── application-test.yml
 │   │       └── scripts/rate_limit.lua
 │   └── test/
-│       └── java/...                 # 85 tests
+│       └── java/...                 # tests
 ├── docs/                            # This documentation
 ├── simplydone4j-demo/               # Demo app
 ├── pom.xml
@@ -175,5 +175,5 @@ SimplyDone4J/
 2. Implement with tests (unit + integration if Redis-touching)
 3. Update relevant docs in `docs/`
 4. Open PR with description of changes
-5. CI must pass (85 tests green)
+5. CI must pass (all tests green)
 6. Squash-merge to `main`
