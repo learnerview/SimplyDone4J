@@ -34,7 +34,6 @@ import io.github.learnerview.simplydone4j.service.impl.RedisRateLimiterStrategy;
 import io.github.learnerview.simplydone4j.service.impl.RetryServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.SchedulerEngine;
 import io.github.learnerview.simplydone4j.service.impl.WorkerMaintenanceServiceImpl;
-import io.github.learnerview.simplydone4j.service.impl.RateLimiterCircuitBreaker;
 import jakarta.validation.Validator;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
