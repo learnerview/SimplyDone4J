@@ -1,8 +1,6 @@
 package io.github.learnerview.simplydone4j.service;
 
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
-import io.github.learnerview.simplydone4j.dto.JobSubmissionRequest;
-import io.github.learnerview.simplydone4j.dto.JobSubmissionResponse;
 import io.github.learnerview.simplydone4j.entity.JobEntity;
 import io.github.learnerview.simplydone4j.event.JobEventPublisher;
 import io.github.learnerview.simplydone4j.handler.HandlerRegistry;
@@ -26,7 +24,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -59,6 +56,14 @@ class StressTest {
     @BeforeEach
     void setUp() {
         validator = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
+        timeoutScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+
+        // Stand in for a store that always accepts the fenced write, so these tests
+        // measure worker-pool behaviour rather than re-fencing. The LeaseFencingTest
+        // class covers the rejection path.
+        lenient().when(jobRepo.saveIfLeaseHeld(any(), anyString())).thenReturn(true);
+        lenient().when(retryService.handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong()))
+                .thenAnswer(inv -> inv.getArgument(0));
     }
 
     private JobExecutorService createExecutorService(int core, int max, int queueCap) {
@@ -69,8 +74,8 @@ class StressTest {
         executor.setKeepAliveSeconds(10);
         executor.setThreadNamePrefix("stress-worker-");
         executor.initialize();
-        return new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry,
-                eventPublisher, webhookService, executor, 30);
+        return new JobExecutorServiceImpl(jobRepo, queueRepo, retryService, handlerRegistry,
+                eventPublisher, webhookService, executor, timeoutScheduler, 30);
     }
 
     @Test
@@ -92,8 +97,8 @@ class StressTest {
 
         doAnswer(inv -> {
             failed.incrementAndGet();
-            return null;
-        }).when(retryService).handleFailure(any(), anyString(), anyLong());
+            return inv.getArgument(0);
+}).when(retryService).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
 
         ConcurrentHashMap<String, JobEntity> jobMap = new ConcurrentHashMap<>();
         when(jobRepo.findById(anyString())).thenAnswer(inv ->
@@ -166,8 +171,8 @@ class StressTest {
 
         doAnswer(inv -> {
             failureCount.incrementAndGet();
-            return "RETRY_SCHEDULED";
-        }).when(retryService).handleFailure(any(), anyString(), anyLong());
+            return inv.getArgument(0);
+        }).when(retryService).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
 
         ConcurrentHashMap<String, JobEntity> jobMap = new ConcurrentHashMap<>();
         when(jobRepo.findById(anyString())).thenAnswer(inv ->
@@ -308,8 +313,8 @@ class StressTest {
 
         doAnswer(inv -> {
             failed.incrementAndGet();
-            return "RETRY_SCHEDULED";
-        }).when(retryService).handleFailure(any(), anyString(), anyLong());
+            return inv.getArgument(0);
+        }).when(retryService).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
 
         ConcurrentHashMap<String, JobEntity> jobMap = new ConcurrentHashMap<>();
         when(jobRepo.findById(anyString())).thenAnswer(inv ->
@@ -352,4 +357,5 @@ class StressTest {
 
     private ThreadPoolTaskExecutor executor;
     private JobExecutorService executorService;
+    private java.util.concurrent.ScheduledExecutorService timeoutScheduler;
 }

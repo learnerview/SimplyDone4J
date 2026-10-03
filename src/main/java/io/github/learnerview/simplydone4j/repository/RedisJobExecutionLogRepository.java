@@ -28,7 +28,11 @@ public final class RedisJobExecutionLogRepository implements JobExecutionLogRepo
         this.logKeyPrefix = props.getKeyPrefix() + ":log:";
         this.storeExecutionLogs = props.getRetention().isStoreExecutionLogs();
         this.maxExecutionLogsPerJob = props.getRetention().getMaxExecutionLogsPerJob();
-        this.ttlHours = (props.getTtlDays() * 24) + props.getTtlHours();
+        // Floored at an hour for the same reason RedisJobRepository floors its own copy:
+        // the `EXPIRE key 0` issued below would delete the list it had just pushed to, so
+        // a `ttl-days: 0` + `ttl-hours: 0` configuration silently discarded every attempt
+        // record while execution-log storage was switched on.
+        this.ttlHours = Math.max(1, (props.getTtlDays() * 24) + props.getTtlHours());
     }
 
     @Override

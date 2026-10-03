@@ -11,6 +11,7 @@ import io.github.learnerview.simplydone4j.event.JobEventPublisher;
 import io.github.learnerview.simplydone4j.exception.JobNotFoundException;
 import io.github.learnerview.simplydone4j.exception.QueueFullException;
 import io.github.learnerview.simplydone4j.mapper.JobMapper;
+import io.github.learnerview.simplydone4j.metrics.JobMetrics;
 import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
@@ -37,12 +38,22 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
     private final JobMapper jobMapper;
     private final JobEventPublisher eventPublisher;
     private final IdempotencyService idempotencyService;
+    private final JobMetrics metrics;
     private final Validator validator;
 
     public JobSubmissionServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
                                      RateLimiterService rateLimiter, SimplyDoneProperties config,
                                      JobMapper jobMapper, JobEventPublisher eventPublisher,
                                      IdempotencyService idempotencyService, Validator validator) {
+        this(jobRepo, queueRepo, rateLimiter, config, jobMapper, eventPublisher, idempotencyService,
+                validator, JobMetrics.NOOP);
+    }
+
+    public JobSubmissionServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
+                                     RateLimiterService rateLimiter, SimplyDoneProperties config,
+                                     JobMapper jobMapper, JobEventPublisher eventPublisher,
+                                     IdempotencyService idempotencyService, Validator validator,
+                                     JobMetrics metrics) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;
         this.rateLimiter = rateLimiter;
@@ -51,6 +62,7 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
         this.eventPublisher = eventPublisher;
         this.idempotencyService = idempotencyService;
         this.validator = validator;
+        this.metrics = metrics == null ? JobMetrics.NOOP : metrics;
     }
 
     @Override
@@ -71,21 +83,33 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
 
         String jobId = UUID.randomUUID().toString();
         Optional<String> existingJobIdOpt = idempotencyService.acquireOrGetExisting(producer, req.getIdempotencyKey(), jobId);
-        
+
         if (existingJobIdOpt.isPresent()) {
             String existingJobId = existingJobIdOpt.get();
             JobEntity existing = jobRepo.findById(existingJobId).orElse(null);
             if (existing != null) {
-                return JobSubmissionResponse.builder()
-                        .jobId(existing.getId())
-                        .status(existing.getStatus().name())
-                        .jobType(existing.getJobType())
-                        .priority(existing.getPriority().name())
-                        .scheduledAt(existing.getNextRunAt())
-                        .build();
+                return dedupResponse(existing);
             }
-            throw new IllegalStateException("Duplicate submission detected for idempotencyKey: "
-                    + req.getIdempotencyKey());
+
+            // The idempotency lock outlived the job record it points at. The two have
+            // independent TTLs, so this happens whenever a job passes its retention window
+            // before its idempotency key expires. Release the stale lock and take a fresh
+            // one rather than rejecting the submission until the key happens to expire --
+            // otherwise this producer can never submit that key again.
+            log.warn("Idempotency key {} for producer {} points at expired job {}; releasing stale lock",
+                    req.getIdempotencyKey(), producer, existingJobId);
+            idempotencyService.releaseIfOwnedBy(producer, req.getIdempotencyKey(), existingJobId);
+
+            Optional<String> reacquired = idempotencyService.acquireOrGetExisting(
+                    producer, req.getIdempotencyKey(), jobId);
+            if (reacquired.isPresent()) {
+                JobEntity raced = jobRepo.findById(reacquired.get()).orElse(null);
+                if (raced != null) {
+                    return dedupResponse(raced);
+                }
+                throw new IllegalStateException("Could not resolve existing job for idempotencyKey: "
+                        + req.getIdempotencyKey());
+            }
         }
 
         JobPriority priority = jobMapper.parsePriority(req.getPriority());
@@ -97,6 +121,7 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
                 .jobType(req.getJobType())
                 .producer(producer)
                 .idempotencyKey(req.getIdempotencyKey())
+                .uniqueKey(req.getUniqueKey())
                 .status(JobStatus.QUEUED)
                 .priority(priority)
                 .payload(jobMapper.serializePayload(req.getPayload()))
@@ -112,6 +137,7 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
         queueRepo.enqueue(jobId, priority, nextRunAt.toEpochMilli());
 
         log.info("Job submitted: {} type={} priority={}", jobId, req.getJobType(), priority);
+        metrics.recordSubmitted(priority);
         eventPublisher.publish(JobEvent.JOB_CREATED, JobEventData.from(job));
 
         return JobSubmissionResponse.builder()
@@ -146,6 +172,16 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
         } else {
             throw new IllegalArgumentException("Can only cancel QUEUED jobs, current: " + job.getStatus());
         }
+    }
+
+    private JobSubmissionResponse dedupResponse(JobEntity existing) {
+        return JobSubmissionResponse.builder()
+                .jobId(existing.getId())
+                .status(existing.getStatus().name())
+                .jobType(existing.getJobType())
+                .priority(existing.getPriority().name())
+                .scheduledAt(existing.getNextRunAt())
+                .build();
     }
 
     private long totalQueueDepth() {

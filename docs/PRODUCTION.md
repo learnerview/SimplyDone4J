@@ -21,13 +21,30 @@ simplydone4j:
 |---|---|
 | Thread pool | `corePoolSize` ≈ CPU cores × 2. `maxPoolSize` handles bursts. |
 | Queue capacity | Keep below `maxDepth` to avoid `QueueFullException`. |
-| Redis memory | ~1–5 KB per job hash + log list. At 100K jobs/day with 30-day retention, expect 3–15 GB. Finished jobs are purged from status indexes immediately, so index memory stays proportional to in-flight work only. |
+| Redis memory | ~1 KB per job hash, plus the execution log list only when `retention.store-execution-logs` is enabled (off by default). Finished jobs carry the same TTL as the job record, so the retention window bounds total growth: at 100K jobs/day over 30 days expect roughly 3 GB of job hashes. Status indexes are TTL'd identically, so index memory tracks retained jobs rather than growing without bound. The fencing counter is a single key and does not grow. |
 
 ---
 
 ## 3. Health Checks
 
-Add `spring-boot-starter-actuator` for Redis health checks. Create a custom indicator:
+SimplyDone4J ships a built-in `SimplyDoneHealthIndicator` (registers as `health` via
+`spring-boot-starter-actuator`). It reports `UP` while work is draining normally and
+`DOWN` once a threshold is crossed or a repository call fails:
+
+| Property | Default | Meaning |
+|---|---|---|
+| `simplydone4j.health.enabled` | `true` | Enable the indicator |
+| `simplydone4j.health.dead-letter-threshold` | `1` | DLQ count at or above reports `DOWN` |
+| `simplydone4j.health.max-queue-depth` | `100000` | **Total** depth across all priority queues above this value reports `DOWN`. `0` disables the check |
+
+Set a threshold to `0` to disable that check (e.g. repository-only health without
+alerting on a busy queue). The indicator exposes `queueDepths`, `totalQueued`, `running`,
+`deadLettered`, and the thresholds as health details.
+
+After a Redis outage it reports `DOWN` with the exception recorded rather than
+propagating, so the health endpoint stays responsive and returns 503 instead of 500.
+To add your own conditions on top (e.g. a success-rate floor), write a custom
+`HealthIndicator` that also injects `MonitoringService`:
 
 ```java
 @Component
@@ -60,20 +77,20 @@ public class JobSystemHealthIndicator implements HealthIndicator {
 
 ### Micrometer / Prometheus
 
-Add `micrometer-core` (and `micrometer-registry-prometheus` for Prometheus) and bind job-count gauges:
+Add `micrometer-core` (and `micrometer-registry-prometheus` for Prometheus). SimplyDone4J
+registers its own instrumentation — no manual binding required:
 
-```java
-@Component
-public class JobMetricsBinder {
-
-    public JobMetricsBinder(MeterRegistry meterRegistry, JobRepository jobRepository) {
-        for (JobStatus status : JobStatus.values()) {
-            meterRegistry.gauge("simplydone4j.jobs." + status.name().toLowerCase(),
-                    jobRepository, repo -> repo.countByStatus(status));
-        }
-    }
-}
-```
+- Counters: `simplydone4j.jobs.submitted`, `simplydone4j.jobs.submitted.by.priority`
+  (tag `priority` = `HIGH`/`NORMAL`/`LOW`), `simplydone4j.jobs.claimed`,
+  `simplydone4j.jobs.completed` (tag `outcome` = `SUCCESS`/`FAILED`/`TIMEOUT`/
+  `DEAD_LETTER`/`DISCARDED`/`DEFERRED`), `simplydone4j.fencing.rejections`,
+  `simplydone4j.lease.reaped`, `simplydone4j.jobs.overlapped`
+- Timers: `simplydone4j.scheduler.poll`, `simplydone4j.jobs.duration` (tag `outcome`)
+- Distribution: `simplydone4j.scheduler.claims.per.poll`
+- Gauges (present by default; set `simplydone4j.metrics.queue-depth=false` to skip the sampling): `simplydone4j.queue.depth`
+  (tag `priority` = `HIGH`/`NORMAL`/`LOW`/`all`) and `simplydone4j.jobs.dead.letter`,
+  refreshed every `queue-depth-refresh-seconds` (default 30s) on a timer — never on the
+  scrape path, so a slow Redis can't stall an actuator scrape
 
 ### Actuator Endpoints
 
@@ -81,9 +98,9 @@ Enable via `spring-boot-starter-actuator`:
 
 | Endpoint | Description |
 |---|---|
-| `actuator/health` | Basic health check (incl. custom `JobSystemHealthIndicator`) |
+| `actuator/health` | Basic health check (incl. custom `SimplyDoneHealthIndicator`) |
 | `actuator/info` | Application info with build metadata |
-| `actuator/metrics` | Custom metrics: `simplydone4j.jobs.queued`, `simplydone4j.jobs.running`, `simplydone4j.jobs.success`, `simplydone4j.jobs.dlq` |
+| `actuator/metrics` | Custom metrics: `simplydone4j.jobs.*`, `simplydone4j.queue.depth`, `simplydone4j.scheduler.*`, `simplydone4j.fencing.*`, `simplydone4j.lease.*` |
 | `actuator/prometheus` | Prometheus-formatted metrics (if `micrometer-registry-prometheus` added) |
 
 Expose endpoints in `application.yml`:

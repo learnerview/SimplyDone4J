@@ -14,6 +14,7 @@ import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -27,6 +28,7 @@ class RedisQueueRepositoryTest {
 
     @Mock StringRedisTemplate redis;
     @Mock ZSetOperations<String, String> zSetOps;
+    @Mock RedisOperations<String, String> ops;
 
     SimplyDoneProperties props;
     RedisQueueRepository repo;
@@ -71,21 +73,84 @@ class RedisQueueRepositoryTest {
 
     @Nested
     class ClaimNextReady {
+        /**
+         * Runs the real SessionCallback body against a mocked RedisOperations so the
+         * WATCH / range / MULTI / EXEC sequence is actually exercised rather than
+         * being short-circuited by a stubbed return value.
+         */
+        private void runCallback(Set<ZSetOperations.TypedTuple<String>> candidates, List<Object> execResult) {
+            lenient().when(ops.opsForZSet()).thenReturn(zSetOps);
+            lenient().when(ops.exec()).thenReturn(execResult);
+            when(zSetOps.rangeByScoreWithScores(anyString(), anyDouble(), anyDouble(), anyLong(), anyLong()))
+                    .thenReturn(candidates);
+
+            when(redis.execute(any(SessionCallback.class))).thenAnswer(inv -> {
+                SessionCallback<?> callback = inv.getArgument(0);
+                return callback.execute(ops);
+            });
+        }
+
+        private ZSetOperations.TypedTuple<String> tuple(String value, double score) {
+            @SuppressWarnings("unchecked")
+            ZSetOperations.TypedTuple<String> t = mock(ZSetOperations.TypedTuple.class);
+            when(t.getValue()).thenReturn(value);
+            // The claim path only reads values, but keep the score realistic for any
+            // future ordering assertion.
+            lenient().when(t.getScore()).thenReturn(score);
+            return t;
+        }
+
         @Test
         void shouldClaimNextReadyJobViaTransaction() {
-            when(redis.execute(any(SessionCallback.class))).thenReturn(Optional.of("job-1"));
+            runCallback(Set.of(tuple("job-1", 100L)), List.of(true));
 
             Optional<String> result = repo.claimNextReady(JobPriority.NORMAL);
+
             assertTrue(result.isPresent());
             assertEquals("job-1", result.get());
+            verify(ops).watch("sd4j-test:queue:normal");
+            verify(zSetOps).remove("sd4j-test:queue:normal", "job-1");
         }
 
         @Test
         void shouldReturnEmptyWhenNoJobsReady() {
-            when(redis.execute(any(SessionCallback.class))).thenReturn(Optional.empty());
+            runCallback(Set.of(), List.of());
 
             Optional<String> result = repo.claimNextReady(JobPriority.LOW);
+
             assertFalse(result.isPresent());
+        }
+
+        @Test
+        void shouldClaimUpToTheRequestedBatchSize() {
+            runCallback(new LinkedHashSet<>(List.of(
+                            tuple("job-1", 100L), tuple("job-2", 200L), tuple("job-3", 300L))),
+                    List.of(true));
+
+            List<String> claimed = repo.claimReady(JobPriority.HIGH, 2);
+
+            // The zset range must be capped so a backlogged queue cannot be drained
+            // into one unbounded claim.
+            verify(zSetOps).rangeByScoreWithScores(eq("sd4j-test:queue:high"),
+                    anyDouble(), anyDouble(), eq(0L), eq(2L));
+            verify(zSetOps).remove("sd4j-test:queue:high", "job-1", "job-2", "job-3");
+            assertEquals(List.of("job-1", "job-2", "job-3"), claimed);
+        }
+
+        @Test
+        void shouldReturnNothingWhenTheWatchedKeyChangedUnderneath() {
+            // exec() returning null is how Redis reports a lost WATCH.
+            runCallback(Set.of(tuple("job-1", 100L)), null);
+
+            assertEquals(List.of(), repo.claimReady(JobPriority.NORMAL, 5),
+                    "A lost optimistic lock must not report jobs as claimed");
+        }
+
+        @Test
+        void shouldReturnNothingForNonPositiveLimit() {
+            assertEquals(List.of(), repo.claimReady(JobPriority.HIGH, 0));
+            assertEquals(List.of(), repo.claimReady(JobPriority.HIGH, -1));
+            verify(redis, never()).execute(any(SessionCallback.class));
         }
 
         @Test

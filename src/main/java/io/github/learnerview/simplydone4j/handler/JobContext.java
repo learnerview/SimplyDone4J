@@ -1,13 +1,29 @@
 package io.github.learnerview.simplydone4j.handler;
 
 import io.github.learnerview.simplydone4j.entity.JobEntity;
+import lombok.Builder;
+import lombok.Getter;
 
 import java.time.Instant;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-public final class JobContext {
+/**
+ * Everything a handler is given about the job it is running.
+ *
+ * <p>Mostly immutable, with the two exception fields deliberately atomic rather than
+ * plain. A handler reports progress from its own worker thread while the engine polls
+ * {@code cancellationRequested} from the watchdog and monitoring threads, so those two
+ * need to be safe to touch concurrently.</p>
+ *
+ * <p>The three identity fields are required at construction. A context without a job id
+ * cannot be logged, correlated, or retried, so failing loudly here beats handing a
+ * handler a context that breaks somewhere less obvious later.</p>
+ */
+@Getter
+@Builder
+public class JobContext {
     private final String jobId;
     private final String jobType;
     private final String producer;
@@ -15,32 +31,31 @@ public final class JobContext {
     private final int attemptCount;
     private final int maxAttempts;
     private final int timeoutSeconds;
+
+    /**
+     * Wall-clock point after which this job should be considered overdue, or
+     * {@code null} when no timeout applies. Derived from the job's own {@code createdAt}
+     * rather than from when execution started, so a job that sat queued for a while is
+     * still measured against its real deadline.
+     */
     private final Instant deadline;
+
     private final AtomicBoolean cancellationRequested;
     private final AtomicReference<ProgressCallback> progressCallback;
 
-    private JobContext(Builder builder) {
-        this.jobId = Objects.requireNonNull(builder.jobId, "jobId");
-        this.jobType = Objects.requireNonNull(builder.jobType, "jobType");
-        this.producer = Objects.requireNonNull(builder.producer, "producer");
-        this.payload = builder.payload;
-        this.attemptCount = builder.attemptCount;
-        this.maxAttempts = builder.maxAttempts;
-        this.timeoutSeconds = builder.timeoutSeconds;
-        this.deadline = builder.deadline;
-        this.cancellationRequested = builder.cancellationRequested;
-        this.progressCallback = builder.progressCallback;
-    }
-
     public static JobContext from(JobEntity job) {
+        Integer jobTimeout = job.getTimeoutSeconds();
         return builder()
-                .jobId(job.getId())
-                .jobType(job.getJobType())
-                .producer(job.getProducer())
+                .jobId(Objects.requireNonNull(job.getId(), "jobId"))
+                .jobType(Objects.requireNonNull(job.getJobType(), "jobType"))
+                .producer(Objects.requireNonNull(job.getProducer(), "producer"))
                 .payload(job.getPayload())
                 .attemptCount(job.getAttemptCount())
                 .maxAttempts(job.getMaxAttempts())
-                .timeoutSeconds(job.getTimeoutSeconds())
+                // A job with no explicit timeout reports zero here rather than null: the
+                // field is a primitive, and the executor's default is already applied to the
+                // watchdog, so the handler only ever reads this for reporting.
+                .timeoutSeconds(jobTimeout != null ? jobTimeout : 0)
                 .deadline(computeDeadline(job))
                 .cancellationRequested(new AtomicBoolean(false))
                 .progressCallback(new AtomicReference<>())
@@ -56,16 +71,11 @@ public final class JobContext {
         return null;
     }
 
-    public String getJobId() { return jobId; }
-    public String getJobType() { return jobType; }
-    public String getProducer() { return producer; }
-    public String getPayload() { return payload; }
-    public int getAttemptCount() { return attemptCount; }
-    public int getMaxAttempts() { return maxAttempts; }
-    public int getTimeoutSeconds() { return timeoutSeconds; }
-
-    public Instant getDeadline() { return deadline; }
-
+    /**
+     * Null-tolerant even though {@link #from} always sets the field, so a hand-built
+     * context from {@code builder()} reads as "not cancelled" instead of throwing. A
+     * handler polling this should not have to guard the guard.
+     */
     public boolean isCancellationRequested() {
         return cancellationRequested != null && cancellationRequested.get();
     }
@@ -76,6 +86,7 @@ public final class JobContext {
         }
     }
 
+    /** Last reported progress, or {@code 0.0} if the handler has never reported any. */
     public double getProgress() {
         ProgressCallback cb = progressCallback != null ? progressCallback.get() : null;
         return cb != null ? cb.progress() : 0.0;
@@ -88,40 +99,10 @@ public final class JobContext {
         }
     }
 
-    public static Builder builder() { return new Builder(); }
-
-    public static final class Builder {
-        private String jobId;
-        private String jobType;
-        private String producer;
-        private String payload;
-        private int attemptCount;
-        private int maxAttempts;
-        private int timeoutSeconds;
-        private Instant deadline;
-        private AtomicBoolean cancellationRequested;
-        private AtomicReference<ProgressCallback> progressCallback;
-
-        private Builder() {
-            this.cancellationRequested = new AtomicBoolean(false);
-            this.progressCallback = new AtomicReference<>();
-        }
-
-        public Builder jobId(String jobId) { this.jobId = jobId; return this; }
-        public Builder jobType(String jobType) { this.jobType = jobType; return this; }
-        public Builder producer(String producer) { this.producer = producer; return this; }
-        public Builder payload(String payload) { this.payload = payload; return this; }
-        public Builder attemptCount(int attemptCount) { this.attemptCount = attemptCount; return this; }
-        public Builder maxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; return this; }
-        public Builder timeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds != null ? timeoutSeconds : 0; return this; }
-        public Builder deadline(Instant deadline) { this.deadline = deadline; return this; }
-        public Builder cancellationRequested(AtomicBoolean cancellationRequested) { this.cancellationRequested = cancellationRequested; return this; }
-        public Builder progressCallback(AtomicReference<ProgressCallback> progressCallback) { this.progressCallback = progressCallback; return this; }
-        public JobContext build() { return new JobContext(this); }
-    }
-
+    /** How a handler reports in-flight progress. */
     public interface ProgressCallback {
         void update(double percent, String message);
+
         double progress();
     }
 }

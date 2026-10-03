@@ -47,7 +47,7 @@ class RateLimiterCircuitBreakerIntegrationTest {
     @Test
     void shouldCallOnSuccessWhenRedisAllowsRequest() {
         when(circuitBreaker.isOpen()).thenReturn(false);
-        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString()))
+        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of(1L, System.currentTimeMillis()));
 
         assertDoesNotThrow(() -> redisStrategy.checkRateLimit("producer-1"));
@@ -62,7 +62,7 @@ class RateLimiterCircuitBreakerIntegrationTest {
         when(circuitBreaker.isOpen()).thenReturn(false);
         long windowMs = props.getRateLimit().getWindowSeconds() * 1000L;
         long oldestTs = System.currentTimeMillis() - windowMs + 2000L;
-        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString()))
+        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of(0L, oldestTs));
 
         // Business rejection is thrown, but circuit breaker must NOT record a failure.
@@ -75,7 +75,7 @@ class RateLimiterCircuitBreakerIntegrationTest {
     @Test
     void shouldCallOnFailureWhenRedisThrowsInfrastructureError() {
         when(circuitBreaker.isOpen()).thenReturn(false);
-        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString()))
+        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString(), anyString()))
                 .thenThrow(new RuntimeException("Connection refused"));
         when(circuitBreaker.getRetryAfterSeconds()).thenReturn(30L);
 
@@ -88,7 +88,7 @@ class RateLimiterCircuitBreakerIntegrationTest {
     @Test
     void shouldCallOnFailureWhenLuaReturnsNullResponse() {
         when(circuitBreaker.isOpen()).thenReturn(false);
-        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString()))
+        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(null);
         when(circuitBreaker.getRetryAfterSeconds()).thenReturn(30L);
 
@@ -101,7 +101,7 @@ class RateLimiterCircuitBreakerIntegrationTest {
     @Test
     void shouldCallOnFailureWhenLuaReturnsMalformedResponse() {
         when(circuitBreaker.isOpen()).thenReturn(false);
-        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString()))
+        when(redis.execute(any(), anyList(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(List.of()); // empty — not the expected [allowed, oldest]
         when(circuitBreaker.getRetryAfterSeconds()).thenReturn(30L);
 

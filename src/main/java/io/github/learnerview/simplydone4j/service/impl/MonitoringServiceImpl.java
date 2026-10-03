@@ -20,13 +20,11 @@ public final class MonitoringServiceImpl implements MonitoringService {
 
     private final JobQueryRepository jobRepo;
     private final QueueRepository queueRepo;
-    private final JobExecutionLogRepository logRepo;
-
+    
     public MonitoringServiceImpl(JobQueryRepository jobRepo, QueueRepository queueRepo,
                                  JobExecutionLogRepository logRepo) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;
-        this.logRepo = logRepo;
     }
 
     @Override

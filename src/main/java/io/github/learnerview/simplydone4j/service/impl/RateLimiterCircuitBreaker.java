@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * A simple three-state circuit breaker for the Redis rate limiter.
  *
- * <h3>State machine</h3>
+ * <h2>State machine</h2>
  * <pre>
  *  CLOSED ──(failures >= threshold)──▶ OPEN
  *    ▲                                    │
@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *                                       OPEN
  * </pre>
  *
- * <h3>Thread safety</h3>
+ * <h2>Thread safety</h2>
  * All state transitions use {@link AtomicReference} CAS to avoid races in
  * HALF_OPEN where multiple threads could simultaneously probe Redis.
  * Only one probe is allowed in HALF_OPEN — subsequent callers see OPEN until

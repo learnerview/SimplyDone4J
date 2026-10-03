@@ -39,6 +39,16 @@
       "name": "simplydone4j.monitoring",
       "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Monitoring",
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.metrics",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Metrics",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.health",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Health",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     }
   ],
   "properties": [
@@ -57,8 +67,7 @@
     {
       "name": "simplydone4j.scheduler.queue-prefix",
       "type": "java.lang.String",
-      "defaultValue": "simplydone4j:queue",
-      "description": "Redis key prefix for queue sorted sets."
+      "description": "Redis key prefix for the priority queue sorted sets. Unset by default, in which case it is derived as '<key-prefix>:queue' so that changing key-prefix moves the queues with it and tenant isolation holds. Set it explicitly only to keep queues on a different prefix."
     },
     {
       "name": "simplydone4j.scheduler.weights.high",
@@ -98,7 +107,7 @@
     },
     {
       "name": "simplydone4j.retry.initial-delay-seconds",
-      "type": "java.lang.Integer",
+      "type": "java.lang.Long",
       "defaultValue": 5,
       "description": "Initial delay before first retry in seconds."
     },
@@ -177,8 +186,8 @@
     {
       "name": "simplydone4j.ttl-days",
       "type": "java.lang.Integer",
-      "defaultValue": 30,
-      "description": "TTL in days for finished (success/failed/DLQ/cancelled) job data."
+      "defaultValue": 0,
+      "description": "Days component of the TTL applied to finished (success/failed/DLQ/cancelled) job data. Effective TTL is ttl-days*24 + ttl-hours, so the default retention is 1 hour; raise it if you need finished jobs to stay inspectable."
     },
     {
       "name": "simplydone4j.idempotency-ttl-hours",
@@ -191,6 +200,36 @@
       "type": "java.lang.Boolean",
       "defaultValue": true,
       "description": "Enable the monitoring service."
+    },
+    {
+      "name": "simplydone4j.metrics.enabled",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Publish Micrometer instruments. Silently degrades to no-op instrumentation when Micrometer is not on the classpath."
+    },
+    {
+      "name": "simplydone4j.metrics.queue-depth",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Expose the queue-depth and dead-letter gauges, sampled on a timer rather than on the scrape path. On by default; set to false to skip the sampling scan entirely."
+    },
+    {
+      "name": "simplydone4j.health.dead-letter-threshold",
+      "type": "java.lang.Integer",
+      "defaultValue": 1,
+      "description": "Dead-lettered job count at or above which health reports DOWN. 0 disables the check."
+    },
+    {
+      "name": "simplydone4j.health.max-queue-depth",
+      "type": "java.lang.Long",
+      "defaultValue": 100000,
+      "description": "Total depth across all priority queues above which health reports DOWN. 0 disables the check."
+    },
+    {
+      "name": "simplydone4j.retention.store-execution-logs",
+      "type": "java.lang.Boolean",
+      "defaultValue": false,
+      "description": "Keep a per-attempt execution log in Redis. Off by default: it is a debugging aid, not engine state."
     }
   ]
 }

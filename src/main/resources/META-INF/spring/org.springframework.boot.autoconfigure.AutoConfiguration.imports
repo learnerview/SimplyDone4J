@@ -1,2 +1,4 @@
 io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneRedisAutoConfiguration
+io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneMetricsAutoConfiguration
 io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneAutoConfiguration
+io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneHealthAutoConfiguration

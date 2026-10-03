@@ -1,17 +1,25 @@
 package io.github.learnerview.simplydone4j.autoconfigure;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties.Executor;
 import io.github.learnerview.simplydone4j.event.JobEventPublisher;
 import io.github.learnerview.simplydone4j.handler.HandlerRegistry;
 import io.github.learnerview.simplydone4j.mapper.JobMapper;
+import io.github.learnerview.simplydone4j.metrics.JobMetrics;
+import io.github.learnerview.simplydone4j.repository.FencingTokenSequence;
 import io.github.learnerview.simplydone4j.repository.JobExecutionLogRepository;
 import io.github.learnerview.simplydone4j.repository.JobQueryRepository;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
 import io.github.learnerview.simplydone4j.repository.QueueRepository;
+import io.github.learnerview.simplydone4j.repository.RedisFencingTokenSequence;
 import io.github.learnerview.simplydone4j.repository.RedisJobExecutionLogRepository;
 import io.github.learnerview.simplydone4j.repository.RedisJobRepository;
 import io.github.learnerview.simplydone4j.repository.RedisQueueRepository;
+import io.github.learnerview.simplydone4j.repository.RedisUniquenessGuard;
+import io.github.learnerview.simplydone4j.service.DeadLetterService;
 import io.github.learnerview.simplydone4j.service.IdempotencyService;
 import io.github.learnerview.simplydone4j.service.JobExecutorService;
 import io.github.learnerview.simplydone4j.service.JobSubmissionService;
@@ -20,8 +28,10 @@ import io.github.learnerview.simplydone4j.service.RateLimiterService;
 import io.github.learnerview.simplydone4j.service.RetryPolicy;
 import io.github.learnerview.simplydone4j.service.RetryService;
 import io.github.learnerview.simplydone4j.service.SchedulerService;
+import io.github.learnerview.simplydone4j.service.UniquenessGuard;
 import io.github.learnerview.simplydone4j.service.WebhookService;
 import io.github.learnerview.simplydone4j.service.WorkerMaintenanceService;
+import io.github.learnerview.simplydone4j.service.impl.DeadLetterServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.ExponentialBackoffRetryPolicy;
 import io.github.learnerview.simplydone4j.service.impl.HttpWebhookServiceImpl;
 import io.github.learnerview.simplydone4j.service.impl.InMemoryRateLimiterStrategy;
@@ -43,14 +53,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-import java.util.List;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -73,9 +82,25 @@ import java.util.concurrent.ThreadPoolExecutor;
 @ConditionalOnClass({StringRedisTemplate.class})
 public final class SimplyDoneAutoConfiguration {
 
-    // ObjectMapper is intentionally NOT declared here.
-    // Spring Boot's JacksonAutoConfiguration provides a correctly configured one,
-    // and this configuration runs after it (see @AutoConfiguration(after=...)).
+    /**
+     * Supplies a Jackson 2 {@link ObjectMapper} only when the application has none.
+     *
+     * <p>This configuration runs after Boot's Jackson auto-configuration, so a mapper the
+     * host provides still wins. The fallback exists because Spring Boot 4 defaults to
+     * Jackson 3 ({@code tools.jackson}) and its auto-configuration therefore no longer
+     * contributes a {@code com.fasterxml} mapper, while job payloads carry
+     * {@code java.time} values that need {@code JavaTimeModule}. Without this bean any
+     * Boot 4 application failed at startup with "No qualifying bean of type
+     * ObjectMapper". A starter should not require the host to hand it one.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public ObjectMapper objectMapper() {
+        return JsonMapper.builder()
+                .addModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .build();
+    }
 
     @Bean
     @ConditionalOnMissingBean
@@ -96,7 +121,20 @@ public final class SimplyDoneAutoConfiguration {
         executor.setThreadNamePrefix("sd4j-worker-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(exec.getAwaitTerminationSeconds());
-        RejectedExecutionHandler handler = new ThreadPoolExecutor.CallerRunsPolicy();
+        // AbortPolicy, deliberately not CallerRunsPolicy.
+        //
+        // The submit happens on the @Scheduled thread (SchedulerEngine.poll), so CallerRuns
+        // would execute the job handler *inline on the scheduler thread* whenever the pool is
+        // saturated. A handler may run for defaultTimeoutSeconds, which parks the scheduler:
+        // SchedulerEngine.poll, WorkerMaintenanceServiceImpl.promoteRetries and
+        // recoverExpiredLeases all share Spring's single scheduled-task thread, so a busy
+        // pool silently stops lease reaping and retry promotion too. Expired leases then sit
+        // unrecovered and retried jobs stall until the backlog clears.
+        //
+        // Aborting is safe because the job was already removed from the priority ZSET by
+        // claimReady, and SchedulerEngine restores anything that fails to dispatch. So a
+        // rejection means "not now, still on the queue" rather than "lost".
+        RejectedExecutionHandler handler = new ThreadPoolExecutor.AbortPolicy();
         executor.setRejectedExecutionHandler(handler);
         executor.initialize();
         return executor;
@@ -106,6 +144,12 @@ public final class SimplyDoneAutoConfiguration {
     @ConditionalOnMissingBean
     public QueueRepository queueRepository(StringRedisTemplate redis, SimplyDoneProperties props) {
         return new RedisQueueRepository(redis, props);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public FencingTokenSequence fencingTokenSequence(StringRedisTemplate redis, SimplyDoneProperties props) {
+        return new RedisFencingTokenSequence(redis, props);
     }
 
     @Bean
@@ -164,6 +208,24 @@ public final class SimplyDoneAutoConfiguration {
         return new RetryServiceImpl(jobRepo, logRepo, props, eventPublisher, retryPolicy);
     }
 
+    /**
+     * Always defined so the other engine beans can depend on the type unconditionally.
+     *
+     * <p>Deliberately free of any Micrometer reference. When Micrometer is on the
+     * classpath, {@link SimplyDoneMetricsAutoConfiguration} contributes the real
+     * instrumented bean first and this one backs off via
+     * {@code @ConditionalOnMissingBean}; when it is absent, this no-op keeps the
+     * engine working. Declaring a {@code ObjectProvider<MeterRegistry>} parameter
+     * here instead would make Spring resolve that optional type while building the
+     * bean definition and fail with {@code TypeNotPresentException} on hosts that
+     * omit the optional dependency.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public JobMetrics jobMetrics() {
+        return JobMetrics.NOOP;
+    }
+
     @Bean
     @ConditionalOnMissingBean
     public IdempotencyService idempotencyService(StringRedisTemplate redis, SimplyDoneProperties props) {
@@ -176,27 +238,60 @@ public final class SimplyDoneAutoConfiguration {
                                                       RateLimiterService rateLimiter, SimplyDoneProperties props,
                                                       JobMapper jobMapper, JobEventPublisher eventPublisher,
                                                       IdempotencyService idempotencyService,
+                                                      JobMetrics metrics,
                                                       ObjectProvider<Validator> validatorProvider) {
         Validator validator = validatorProvider.getIfAvailable(() ->
                 jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator());
         return new JobSubmissionServiceImpl(jobRepo, queueRepo, rateLimiter, props, jobMapper, eventPublisher,
-                idempotencyService, validator);
+                idempotencyService, validator, metrics);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    public WebhookService webhookService() {
-        return new HttpWebhookServiceImpl();
+    public WebhookService webhookService(SimplyDoneProperties props) {
+        return new HttpWebhookServiceImpl(props);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    public JobExecutorService jobExecutorService(JobRepository jobRepo, RetryService retryService,
+    public DeadLetterService deadLetterService(JobRepository jobRepo, QueueRepository queueRepo,
+                                               JobEventPublisher eventPublisher, JobMetrics metrics,
+                                               SimplyDoneProperties props) {
+        return new DeadLetterServiceImpl(jobRepo, queueRepo, eventPublisher, props, metrics);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public UniquenessGuard uniquenessGuard(StringRedisTemplate redis, SimplyDoneProperties props) {
+        return props.getUniqueness().isEnabled()
+                ? new RedisUniquenessGuard(redis, props)
+                : UniquenessGuard.DISABLED;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public JobExecutorService jobExecutorService(JobRepository jobRepo, QueueRepository queueRepo,
+                                                  RetryService retryService,
                                                   HandlerRegistry handlerRegistry, JobEventPublisher eventPublisher,
-                                                  WebhookService webhookService, ThreadPoolTaskExecutor executor,
+                                                  WebhookService webhookService, UniquenessGuard uniquenessGuard,
+                                                  ThreadPoolTaskExecutor executor,
+                                                  ScheduledExecutorService jobTimeoutScheduler,
+                                                  JobMetrics metrics,
                                                   SimplyDoneProperties props) {
-        return new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher, webhookService,
-                executor, props.getExecutor().getDefaultTimeoutSeconds());
+        return new JobExecutorServiceImpl(jobRepo, queueRepo, retryService, handlerRegistry, eventPublisher,
+                webhookService, uniquenessGuard, props.getUniqueness().getDeferSeconds(),
+                props.getUniqueness().getTtlSeconds(), executor,
+                jobTimeoutScheduler, props.getExecutor().getDefaultTimeoutSeconds(), metrics);
+    }
+
+    @Bean(destroyMethod = "shutdown")
+    @ConditionalOnMissingBean
+    public ScheduledExecutorService jobTimeoutScheduler() {
+        return Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "sd4j-timeout");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     @Bean
@@ -204,8 +299,11 @@ public final class SimplyDoneAutoConfiguration {
     @ConditionalOnProperty(prefix = "simplydone4j.scheduler", name = "enabled",
             havingValue = "true", matchIfMissing = true)
     public SchedulerService schedulerEngine(QueueRepository queueRepo, JobRepository jobRepo,
-                                             JobExecutorService jobExecutor, SimplyDoneProperties props) {
-        return new SchedulerEngine(queueRepo, jobRepo, jobExecutor, props);
+                                             JobExecutorService jobExecutor,
+                                             FencingTokenSequence fencingTokens,
+                                             JobMetrics metrics,
+                                             SimplyDoneProperties props) {
+        return new SchedulerEngine(queueRepo, jobRepo, jobExecutor, fencingTokens, props, metrics);
     }
 
     @Bean
@@ -223,7 +321,8 @@ public final class SimplyDoneAutoConfiguration {
             havingValue = "true", matchIfMissing = true)
     public WorkerMaintenanceService workerMaintenanceService(JobRepository jobRepo, QueueRepository queueRepo,
                                                               RetryService retryService,
+                                                              JobMetrics metrics,
                                                               SimplyDoneProperties props) {
-        return new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService, props);
+        return new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService, props, metrics);
     }
 }

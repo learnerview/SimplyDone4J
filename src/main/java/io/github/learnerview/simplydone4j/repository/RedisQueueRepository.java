@@ -2,26 +2,31 @@ package io.github.learnerview.simplydone4j.repository;
 
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.model.JobPriority;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 public final class RedisQueueRepository implements QueueRepository {
-    private static final Logger log = LoggerFactory.getLogger(RedisQueueRepository.class);
-    private final StringRedisTemplate redis;
+        private final StringRedisTemplate redis;
     private final String queuePrefix;
 
     public RedisQueueRepository(StringRedisTemplate redis, SimplyDoneProperties props) {
         this.redis = redis;
-        this.queuePrefix = props.getScheduler().getQueuePrefix();
+        // Derive from keyPrefix unless explicitly overridden. Reading a separate
+        // scheduler.queuePrefix default meant that setting `key-prefix: prod` moved
+        // every data key to `prod:*` while the priority queues stayed behind at
+        // `simplydone4j:queue:*`, silently defeating key-prefix tenant isolation.
+        String configured = props.getScheduler().getQueuePrefix();
+        this.queuePrefix = (configured != null && !configured.isBlank())
+                ? configured
+                : props.getKeyPrefix() + ":queue";
     }
 
     @Override
@@ -31,31 +36,42 @@ public final class RedisQueueRepository implements QueueRepository {
 
     @Override
     public Optional<String> claimNextReady(JobPriority priority) {
+        return claimReady(priority, 1).stream().findFirst();
+    }
+
+    @Override
+    public List<String> claimReady(JobPriority priority, int limit) {
+        if (limit <= 0) return List.of();
         String key = queueKey(priority);
         long now = System.currentTimeMillis();
 
-        return redis.execute(new SessionCallback<>() {
+        return redis.execute(new SessionCallback<List<String>>() {
             @Override
             @SuppressWarnings("unchecked")
-            public Optional<String> execute(RedisOperations ops) throws DataAccessException {
+            public List<String> execute(RedisOperations ops) throws DataAccessException {
                 ops.watch(key);
-                Set<ZSetOperations.TypedTuple<String>> results =
-                        ops.opsForZSet().rangeByScoreWithScores(key, 0, now, 0, 1);
+                Set<ZSetOperations.TypedTuple<String>> candidates =
+                        ((ZSetOperations<String, String>) ops.opsForZSet())
+                                .rangeByScoreWithScores(key, 0, now, 0, limit);
 
-                if (results == null || results.isEmpty()) {
+                if (candidates == null || candidates.isEmpty()) {
                     ops.unwatch();
-                    return Optional.empty();
+                    return List.of();
                 }
 
-                String jobId = results.iterator().next().getValue();
+                List<String> ids = new ArrayList<>(candidates.size());
+                for (ZSetOperations.TypedTuple<String> candidate : candidates) {
+                    ids.add(candidate.getValue());
+                }
+
                 ops.multi();
-                ops.opsForZSet().remove(key, jobId);
+                ops.opsForZSet().remove(key, ids.toArray());
                 List<Object> execResult = ops.exec();
 
                 if (execResult == null || execResult.isEmpty()) {
-                    return Optional.empty();
+                    return List.of();
                 }
-                return Optional.of(jobId);
+                return ids;
             }
         });
     }

@@ -41,7 +41,9 @@ class RedisJobRepositoryTest {
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        objectMapper.setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
+        objectMapper.setDefaultPropertyInclusion(com.fasterxml.jackson.annotation.JsonInclude.Value.construct(
+                com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL,
+                com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS));
 
         zSetData = new HashMap<>();
 

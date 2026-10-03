@@ -3,15 +3,17 @@ package io.github.learnerview.simplydone4j.service.impl;
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.exception.RateLimitExceededException;
 import io.github.learnerview.simplydone4j.service.RateLimiterStrategy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Redis-backed rate limiter strategy using a Lua sliding-window script.
@@ -25,7 +27,6 @@ import java.util.List;
  *   <li>A rate-limit rejection ({@code allowed == false}) is a legitimate business
  *       result and does <em>not</em> count as a circuit-breaker failure.</li>
  * </ul>
- * </p>
  *
  * <p>When the circuit is OPEN this strategy throws {@link IllegalStateException}
  * so that the composite {@link RateLimiterServiceImpl} falls back to the in-memory
@@ -39,6 +40,20 @@ public class RedisRateLimiterStrategy implements RateLimiterStrategy {
     private final String keyPrefix;
     private final RateLimiterCircuitBreaker circuitBreaker;
     private DefaultRedisScript<List> rateLimitScript;
+
+    /**
+     * Guarantees a distinct ZSET member per submission.
+     *
+     * <p>The sequence keeps members unique within a JVM even for requests sharing a
+     * millisecond; the random suffix keeps them unique across replicas of a cluster,
+     * where each JVM restarts its own sequence at zero.
+     */
+    private final AtomicLong memberSeq = new AtomicLong();
+
+    private String nextMember(long now) {
+        return now + "-" + memberSeq.incrementAndGet()
+                + "-" + Long.toHexString(ThreadLocalRandom.current().nextLong());
+    }
 
     public RedisRateLimiterStrategy(StringRedisTemplate redis, SimplyDoneProperties config) {
         this.redis = redis;
@@ -90,20 +105,25 @@ public class RedisRateLimiterStrategy implements RateLimiterStrategy {
         long now = System.currentTimeMillis();
         String key = keyPrefix + ":ratelimit:" + producer;
 
-        try {
+try {
             @SuppressWarnings("unchecked")
+            // Verified against a real Redis: a Lua MULTI reply arrives as List<Long>,
+            // because Lettuce decodes the script's integer replies as Longs before
+            // Spring applies any value serializer. Reading this as List<String> throws
+            // ClassCastException on every call.
             List<Long> results = redis.execute(rateLimitScript, List.of(key),
                     String.valueOf(now),
                     String.valueOf(windowSeconds * 1000L),
-                    String.valueOf(maxRequests));
+                    String.valueOf(maxRequests),
+                    nextMember(now));
 
             // Null or undersized response means the Lua script returned something
-            // unexpected — treat this as an infrastructure failure.
+            // unexpected - treat this as an infrastructure failure.
             if (results == null || results.size() < 2) {
                 throw new IllegalStateException("Invalid response from Redis rate limit script");
             }
 
-            // Redis and Lua executed correctly — record as a circuit-breaker success
+            // Redis and Lua executed correctly - record as a circuit-breaker success
             // regardless of whether the producer is allowed or rejected.
             circuitBreaker.onSuccess();
 
@@ -128,3 +148,5 @@ public class RedisRateLimiterStrategy implements RateLimiterStrategy {
         }
     }
 }
+
+

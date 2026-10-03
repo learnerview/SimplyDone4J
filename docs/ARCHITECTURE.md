@@ -30,12 +30,14 @@
 | Key | Type | Score / Content | Purpose |
 |---|---|---|---|
 | `{p}:queue:{priority}` | ZSET | `scheduledAtEpochMs` | Delayed-ready priority queues |
-| `{p}:job:{id}` | HASH | JobEntity fields | Job record, TTL on terminal |
-| `{p}:idx:status:{status}` | ZSET | `nextRunAt`/`visibleAt` | Secondary index for promoter/reaper |
+| `{p}:job:{id}` | HASH | JobEntity fields | Job record, TTL on terminal (`ttl-hours` + `ttl-days`) |
+| `{p}:idx:status:{status}` | ZSET | `nextRunAt`/`visibleAt`; terminal members scored `updatedAt` | Secondary index for promoter/reaper, and for `countByStatus` on terminal states |
 | `{p}:idx:status:priority:{s}:{pr}` | ZSET | same | Per-priority index |
-| `{p}:idempotency:{producer}:{key}` | STRING | jobId | SETNX dedup, TTL 1h |
+| `{p}:idempotency:{producer}:{key}` | STRING | jobId | SETNX dedup, TTL `idempotency-ttl-hours` (1h) |
+| `{p}:unique:{key}` | STRING | owner token | Overlap guard, TTL `uniqueness.ttl-seconds` or timeout + 30s |
+| `{p}:fencing:seq` | STRING | counter | Monotonic fencing tokens via `INCR`. **Never expires** - a reset would restart the sequence and let a stale worker's token pass the fence |
 | `{p}:ratelimit:{producer}` | ZSET | timestamps | Sliding window rate limit |
-| `{p}:log:{id}` | LIST | JSON log entries | Execution logs, max 50, 7d TTL |
+| `{p}:log:{id}` | LIST | JSON log entries | Execution logs, **opt-in** (`retention.store-execution-logs`, default off), trimmed to `retention.max-execution-logs-per-job`, TTL same as job |
 
 **Key insight:** Scoring queues by `scheduledAtEpochMs` gives free delayed execution — `ZRANGEBYSCORE 0..now` only returns due jobs. Same trick powers status indexes for the retry promoter (`RETRY_SCHEDULED`) and lease reaper (`RUNNING` past `visibleUntil`).
 
@@ -43,18 +45,19 @@
 
 ## Core Algorithms
 
-### 1. Deficit Weighted Round-Robin (`SchedulerEngine.java:47-74`)
+### 1. Deficit Weighted Round-Robin (`SchedulerEngine.java:64-74, 86-113`)
 
 ```java
 deficit[i] += weights[i];              // every poll
 pick highest deficit where queueSize > 0;
-deficit[best] -= totalWeight;          // after claiming
+deficit[best] -= totalWeight;          // after claiming a batch
 ```
 
-- Weights: HIGH=70, NORMAL=20, LOW=10 (total 100)
-- Guarantees no starvation — lower priorities accumulate deficit and eventually win
+- Weights are relative (not percentages, need not sum to anything): HIGH=70, NORMAL=20, LOW=10
+- Defaults to a batch of `batchSize` (default 10) jobs per poll
+- Deficit is **not** reset when a queue drains — an idle queue accumulates credit, so a burst can immediately transmit instead of waiting a full round. This is what makes it deficit RR rather than plain weighted RR.
 
-### 2. Exponential Backoff (`ExponentialBackoffRetryPolicy.java:17`)
+### 2. Exponential Backoff (`ExponentialBackoffRetryPolicy.java:22`)
 
 ```java
 delayMs = initialDelaySeconds * 1000 * Math.pow(multiplier, attempt);
@@ -80,26 +83,30 @@ return {1, oldest}
 ### 4. Circuit Breaker (`RateLimiterCircuitBreaker.java`)
 
 ```
-CLOSED →(5 failures OR slow call >2s)→ OPEN →(30s)→ HALF_OPEN →(probe success)→ CLOSED
-                                                         (probe failure)→ OPEN
+CLOSED →(5 infrastructure failures)→ OPEN →(30s)→ HALF_OPEN →(probe success)→ CLOSED
+                                                             (probe failure)→ OPEN
 ```
 
-- Thread-safe: `AtomicInteger` counter + `volatile` state/time
-- `isOpen()` lazily performs OPEN→HALF_OPEN transition
+- Counts **infrastructure** failures only (Redis exception, malformed script response). A rate-limit rejection is a legitimate business result and never trips the circuit.
+- Thread-safe: `AtomicInteger` failure counter + `AtomicReference<State>` + `AtomicLong` last-failure timestamp
+- `isOpen()` lazily performs OPEN→HALF_OPEN transition via CAS, so exactly one probing request gets through
 
 ### 5. Optimistic Locking (WATCH/MULTI/EXEC)
 
 Two implementations:
 
-**Queue claim (`RedisQueueRepository.java:37-60`):**
+**Queue claim (`RedisQueueRepository.java:46-79`):**
 ```
-WATCH queueKey
-ZRANGEBYSCORE(0, now, 0, 1)  -- fetch lowest-scored due job
-MULTI ZREM jobId
-EXEC  → empty result = race lost, return empty
+WATCH queue:priority
+ZRANGEBYSCORE(0, now, 0, limit)   -- fetch up to `limit` due jobs (batch claim)
+MULTI ZREM [jobId1, jobId2, ...]
+EXEC  → null/empty result = race lost, return empty
 ```
 
-**Job claim (`RedisJobRepository.java:136-200`):**
+Batch claiming matters for throughput: claiming one job per poll caps throughput at
+`1000 / pollingIntervalMs` jobs per second per instance no matter the worker pool size.
+
+**Job claim (`RedisJobRepository.java`):**
 ```
 WATCH job:{id}
 HGETALL + deserialize
@@ -115,9 +122,9 @@ EXEC → empty = race lost, return 0
 
 ### 6. Lease Fencing Tokens
 
-- UUID token generated at claim time, stored with job
-- Before writing SUCCESS/failure, executor re-fetches and compares `leaseToken` (`JobExecutorServiceImpl.java:123-126`)
-- Mismatch ⇒ another worker owns it ⇒ skip write (prevents zombie-worker double-completion)
+- Monotonic token issued by `FencingTokenSequence` (Redis `INCR`) at claim time, not a UUID — a fencing token must be ordered, so that a downstream store can reject a late write from a superseded epoch.
+- Before writing SUCCESS/failure, the executor captures the token it was issued and re-reads the job, then passes the *issued* token to `saveIfLeaseHeld` for an atomic compare-and-write (`JobExecutorServiceImpl`).
+- Mismatch ⇒ another worker owns it ⇒ skip write (prevents zombie-worker double-completion). The lease reaper uses the same fenced path, so two instances observing the same expired lease cannot both increment the attempt count.
 
 ---
 
@@ -159,11 +166,25 @@ Thread pool uses `CallerRunsPolicy` — when queue is full, the submitting threa
 ### Timeout Enforcement
 
 ```java
-CompletableFuture.supplyAsync(() -> handler.handle(ctx), executor)
-        .get(timeoutSeconds, SECONDS);
+// runs the handler INLINE on the worker thread
+executor.submit(() -> executeWithTimeout(job, timeoutSeconds));
+
+// ... inside executeWithTimeout:
+runHandler(job, handler, timeoutSeconds, start);   // blocks this thread
+future = timeoutScheduler.schedule(watchdog, timeoutSeconds, SECONDS);
 ```
 
-Note: a timed-out handler is **not interrupted** — it keeps running in the pool. This is a known limitation (see [Known Limitations](#known-limitations)).
+The handler runs on the calling worker thread and a watchdog on a separate scheduler
+enforces the deadline. Exactly one path may record an outcome: `ScheduledFuture.cancel`
+returns `false` once the watchdog has begun, so a handler that returns in time writes the
+success, and one that does not is failed by the watchdog (the late success is dropped).
+
+This is intentionally different from `future.get(timeout)` — submitting the handler back to
+the same bounded pool and blocking on it self-deadlocks, because every worker thread waits
+on a handler task queued behind those very threads.
+
+Note: a timed-out handler is **not interrupted** — it keeps running on the worker thread.
+This is a known limitation (see [Known Limitations](#known-limitations)).
 
 ---
 
@@ -172,7 +193,7 @@ Note: a timed-out handler is **not interrupted** — it keeps running in the poo
 | Component | Pool | Queue | Policy |
 |---|---|---|---|
 | Job execution | `ThreadPoolTaskExecutor` (core=4, max=8, queue=100) | Bounded (100) | CallerRunsPolicy |
-| Scheduler | `@Scheduled` (single-thread) | — | — |
-| Maintenance | `@Scheduled` (single-thread each) | — | — |
+| Scheduler | Thread pool (1 by default; `spring.task.scheduling.pool.size` settable) | — | — |
+| Maintenance | `@Scheduled` on a single scheduler thread each | — | — |
 
 Graceful shutdown: `waitForTasksToCompleteOnShutdown=true`, `awaitTermination=30s`.

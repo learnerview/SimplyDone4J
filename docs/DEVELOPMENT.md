@@ -4,33 +4,27 @@
 
 - Java 21+
 - Maven 3.8+
-- Redis 7+ (local, Docker, or Testcontainers)
+
+No Redis or Docker is needed to build or test: every repository test drives the Redis client through a Mockito mock, and the rest are plain unit tests. A local Redis is only needed to run the demo application or to experiment live.
 
 ---
 
-## Build & Test Locally
-
-### Quick Build (skip tests)
+## Build & Test
 
 ```bash
+# Quick build (skip tests)
 mvn clean install -DskipTests
-```
 
-### Full Test Suite
-
-```bash
-# With Testcontainers (starts real Redis in container — requires Docker)
-mvn clean test
-
-# With local Redis (no Docker) — faster, but requires Redis on localhost:6379
-REDIS_HOST=localhost REDIS_PORT=6379 mvn clean test
+# Full suite
+mvn clean verify
 ```
 
 **Test breakdown:**
-- Unit tests with Mockito: handler registry, mappers, retry policies, circuit breaker
-- Integration tests with Testcontainers: Redis repositories, auto-configuration
-- Stress tests: timeout stress, mixed load, variable duration, throughput
+- Unit tests with Mockito: handler registry, mappers, retry policies, circuit breaker, DLQ, overlap guard
+- Webhook tests: retry budget, backoff, JSON body escaping, failure isolation
+- Redis repository tests: jobs, queues, execution logs, uniqueness guard (mocked `StringRedisTemplate`)
 - Lease fencing tests: expired lease recovery, token fencing verification
+- Stress tests: timeout stress, mixed load, variable duration, throughput
 
 All tests pass with 0 failures, 0 errors.
 
@@ -38,56 +32,27 @@ All tests pass with 0 failures, 0 errors.
 
 ## Local Development
 
-### Starting Redis
+### Running the Demo with Local Redis
 
 ```bash
 docker run -d --name redis -p 6379:6379 redis:7-alpine
 ```
 
-### Running Tests with Local Redis
-
-For integration-like behavior without Testcontainers:
+Then build the library and the demo:
 
 ```bash
-export REDIS_HOST=localhost
-export REDIS_PORT=6379
-mvn clean test
-```
-
-This uses your local Redis instance instead of spinning up Testcontainers.
-
-### IDE Setup
-
-- Open as Maven project
-- Enable annotation processing (for `spring-boot-configuration-processor`)
-- Recommended: enable "Run test with Testcontainers" in IntelliJ
-
----
-
-## Demo Application
-
-A complete Spring Boot demo is at the `simplydone4j-demo` sibling directory. It demonstrates:
-
-- 4 job handlers (quick-success, failing-task, long-running, callback-test)
-- REST API: submit, query, cancel, view stats
-- Auto-submission of ~15 jobs on startup
-- Job lifecycle events logged to console
-- Rate limiting and idempotency tests
-
-**Build and run:**
-
-```bash
-# Build the library first
-cd SimplyDone4J
 mvn clean install -DskipTests
-
-# Build and run the demo
 cd ../simplydone4j-demo
 mvn clean package
 java -jar target/simplydone4j-demo-1.0.0.jar
 ```
 
-Access `http://localhost:8080/api/jobs/stats` for queue statistics.
+Read queue statistics programmatically with `MonitoringService.getStats()` (depths and per-status counts). See the sibling `simplydone4j-demo` project for a runnable end-to-end example.
+
+### IDE Setup
+
+- Open as Maven project
+- Enable annotation processing (for `spring-boot-configuration-processor`)
 
 ---
 
@@ -96,8 +61,8 @@ Access `http://localhost:8080/api/jobs/stats` for queue statistics.
 Runs on every push to `main`/`develop` and on pull requests to `main`:
 
 1. **Setup**: Java 21, Maven cache
-2. **Build**: `mvn clean verify` (compiles, runs all tests with Testcontainers)
-3. **Enforce**: Java 21 / Maven 3.8+ via enforcer plugin
+2. **Build**: `mvn clean verify`
+3. The enforcer plugin (Java 21 / Maven 3.8+) runs as part of `verify`
 
 ---
 
@@ -111,25 +76,13 @@ Triggers on GitHub release creation:
 
 **Required secrets:**
 - `MAVEN_USERNAME` / `MAVEN_PASSWORD` (Central Portal token)
-- `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` (GPG signing)
+- `GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE` (GPG signing, used by the release workflow)
 
 ---
 
 ## Git Conventions
 
-```bash
-git clone https://github.com/learnerview/simplydone4j.git
-cd SimplyDone4J
-
-# Branch naming convention:
-# - feature/* for new features
-# - bugfix/* for bug fixes
-# - hotfix/* for production fixes
-# - release/* for release preparation
-```
-
-### Commit Style
-
+- Branch naming: `feature/*`, `bugfix/*`, `hotfix/*`, `release/*`
 - Conventional Commits preferred: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`
 - PRs should include test coverage for new logic
 
@@ -142,27 +95,23 @@ SimplyDone4J/
 ├── src/
 │   ├── main/
 │   │   ├── java/io/github/learnerview/simplydone4j/
-│   │   │   ├── autoconfigure/       # Spring Boot auto-config
 │   │   │   ├── autoconfigure/       # Properties & auto-config classes
-│   │   │   ├── config/              # (empty, reserved)
 │   │   │   ├── dto/                 # Request/Response DTOs
 │   │   │   ├── entity/              # JobEntity, JobExecutionLog
 │   │   │   ├── event/               # JobEvent, JobEventData, JobEventPublisher
 │   │   │   ├── exception/           # Custom exceptions
 │   │   │   ├── handler/             # JobHandler, JobContext, HandlerRegistry
 │   │   │   ├── mapper/              # JobMapper (JSON ↔ Entity)
+│   │   │   ├── metrics/             # JobMetrics, QueueDepthSampler
 │   │   │   ├── model/               # JobPriority, JobStatus enums
 │   │   │   ├── repository/          # Interfaces + Redis implementations
 │   │   │   ├── service/             # Service interfaces + impl packages
 │   │   │   │   └── impl/            # All service implementations
-│   │   │   └── scripts/             # Lua rate-limit script
 │   │   └── resources/
-│   │       ├── application-test.yml
 │   │       └── scripts/rate_limit.lua
 │   └── test/
 │       └── java/...                 # tests
 ├── docs/                            # This documentation
-├── simplydone4j-demo/               # Demo app
 ├── pom.xml
 └── README.md
 ```
@@ -172,7 +121,7 @@ SimplyDone4J/
 ## Adding a New Feature
 
 1. Create feature branch: `git checkout -b feature/my-feature`
-2. Implement with tests (unit + integration if Redis-touching)
+2. Implement with tests (unit tests; mock the `StringRedisTemplate` for repository logic)
 3. Update relevant docs in `docs/`
 4. Open PR with description of changes
 5. CI must pass (all tests green)

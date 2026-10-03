@@ -2,16 +2,35 @@ package io.github.learnerview.simplydone4j.dto;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import lombok.Data;
 
 import java.time.Instant;
 import java.util.Map;
 
-public final class JobSubmissionRequest {
+/**
+ * Inbound request body for job submission.
+ *
+ * <p>Mutable with a no-arg constructor because Jackson binds it. The bean-validation
+ * annotations are what reject bad input: {@code jobType} and {@code idempotencyKey} are
+ * required because a job with neither can never be de-duplicated or routed, and the
+ * numeric bounds stop a caller from submitting a job with a zero-length retry budget or
+ * a timeout that would trip the watchdog the instant the handler starts.</p>
+ */
+@Data
+public class JobSubmissionRequest {
     @NotBlank
     private String jobType;
 
     @NotBlank
     private String idempotencyKey;
+
+    /**
+     * Optional mutual-exclusion key. When uniqueness enforcement is enabled, two jobs
+     * sharing this key never run at the same time; the loser is deferred, not failed.
+     */
+    @Size(max = 200)
+    private String uniqueKey;
 
     private String priority;
     private Map<String, Object> payload;
@@ -24,21 +43,4 @@ public final class JobSubmissionRequest {
     private Integer timeoutSeconds;
 
     private String callbackUrl;
-
-    public String getJobType() { return jobType; }
-    public void setJobType(String jobType) { this.jobType = jobType; }
-    public String getIdempotencyKey() { return idempotencyKey; }
-    public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
-    public String getPriority() { return priority; }
-    public void setPriority(String priority) { this.priority = priority; }
-    public Map<String, Object> getPayload() { return payload; }
-    public void setPayload(Map<String, Object> payload) { this.payload = payload; }
-    public Instant getNextRunAt() { return nextRunAt; }
-    public void setNextRunAt(Instant nextRunAt) { this.nextRunAt = nextRunAt; }
-    public Integer getMaxAttempts() { return maxAttempts; }
-    public void setMaxAttempts(Integer maxAttempts) { this.maxAttempts = maxAttempts; }
-    public Integer getTimeoutSeconds() { return timeoutSeconds; }
-    public void setTimeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
-    public String getCallbackUrl() { return callbackUrl; }
-    public void setCallbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; }
 }

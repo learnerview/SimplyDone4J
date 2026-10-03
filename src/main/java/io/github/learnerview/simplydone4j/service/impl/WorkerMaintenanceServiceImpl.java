@@ -2,6 +2,7 @@ package io.github.learnerview.simplydone4j.service.impl;
 
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.entity.JobEntity;
+import io.github.learnerview.simplydone4j.metrics.JobMetrics;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
 import io.github.learnerview.simplydone4j.repository.QueueRepository;
@@ -13,7 +14,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 
 public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceService {
     private static final Logger log = LoggerFactory.getLogger(WorkerMaintenanceServiceImpl.class);
@@ -21,14 +21,22 @@ public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceServ
     private final JobRepository jobRepo;
     private final QueueRepository queueRepo;
     private final RetryService retryService;
+    private final JobMetrics metrics;
     private final SimplyDoneProperties config;
 
     public WorkerMaintenanceServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
                                         RetryService retryService, SimplyDoneProperties config) {
+        this(jobRepo, queueRepo, retryService, config, JobMetrics.NOOP);
+    }
+
+    public WorkerMaintenanceServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
+                                        RetryService retryService, SimplyDoneProperties config,
+                                        JobMetrics metrics) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;
         this.retryService = retryService;
         this.config = config;
+        this.metrics = metrics == null ? JobMetrics.NOOP : metrics;
     }
 
     @Scheduled(fixedDelayString = "${simplydone4j.worker.retry-promoter-interval-ms:1000}")
@@ -61,23 +69,24 @@ public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceServ
                 if (current == null || current.getStatus() != JobStatus.RUNNING) continue;
 
                 String leaseToken = current.getLeaseToken();
-                String leaseOwner = current.getLeaseOwner();
-
-                if (leaseToken == null || leaseOwner == null) {
-                    log.warn("Job {} has no lease token/owner, skipping recovery", job.getId());
+                if (leaseToken == null) {
+                    log.warn("Job {} is RUNNING without a lease token, skipping recovery", job.getId());
                     continue;
                 }
 
-                // Check if another worker already reclaimed this job
-                JobEntity competing = jobRepo.findById(job.getId()).orElse(null);
-                if (competing != null && !competing.getLeaseToken().equals(leaseToken)) {
-                    log.info("Job {} lease token mismatch - another worker may own it, triggering retry", job.getId());
-                    retryService.handleFailure(current, "Worker lease expired - competing worker", 0L);
+                // The lease check happens inside the write, atomically. Two application
+                // instances can both observe this expired lease, but only one compare-and-write
+                // can succeed, so the attempt count cannot be incremented twice and a job
+                // another worker has already reclaimed cannot be pulled back out from under it.
+                String outcome = retryService.handleFailureIfLeaseHeld(
+                        current, leaseToken, "Worker lease expired", 0L);
+
+                if (outcome == null) {
+                    log.info("Job {} was already recovered by another worker, skipping", job.getId());
                     continue;
                 }
-
-                log.warn("Recovering expired lease for job {}", job.getId());
-                retryService.handleFailure(current, "Worker lease expired", 0L);
+                metrics.recordLeaseReaped();
+                log.warn("Recovered expired lease for job {} -> {}", job.getId(), outcome);
             }
         } catch (Exception e) {
             log.error("Lease reaper failed", e);

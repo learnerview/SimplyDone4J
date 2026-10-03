@@ -60,15 +60,7 @@ class WorkerMaintenanceServiceImplTest {
         }
 
         @Test
-        void shouldNotPromoteFutureRetries() {
-            JobEntity futureJob = JobEntity.builder()
-                    .id("retry-future")
-                    .jobType("test")
-                    .status(JobStatus.RETRY_SCHEDULED)
-                    .priority(JobPriority.LOW)
-                    .nextRunAt(Instant.now().plusSeconds(60))
-                    .build();
-
+        void shouldPromoteNothingWhenNoRetriesAreDue() {
             when(jobRepo.findReadyToRun(eq(JobStatus.RETRY_SCHEDULED), any(Instant.class), eq(100)))
                     .thenReturn(List.of());
 
@@ -118,7 +110,9 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService).handleFailure(expiredJob, "Worker lease expired", 0L);
+            // The reaper must present the token it observed as RUNNING, so the write
+            // is rejected if another worker already reclaimed the job.
+            verify(retryService).handleFailureIfLeaseHeld(expiredJob, "old-token", "Worker lease expired", 0L);
         }
 
         @Test
@@ -127,7 +121,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, never()).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, never()).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
         }
 
         @Test
@@ -145,7 +139,13 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, times(3)).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, times(3)).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
+            verify(retryService).handleFailureIfLeaseHeld(argThat(j -> j.getId().equals("exp-1")), eq("token-1"),
+                    anyString(), anyLong());
+            verify(retryService).handleFailureIfLeaseHeld(argThat(j -> j.getId().equals("exp-2")), eq("token-2"),
+                    anyString(), anyLong());
+            verify(retryService).handleFailureIfLeaseHeld(argThat(j -> j.getId().equals("exp-3")), eq("token-3"),
+                    anyString(), anyLong());
         }
 
         @Test

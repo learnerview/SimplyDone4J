@@ -37,9 +37,56 @@ public final class RetryServiceImpl implements RetryService {
 
     @Override
     public String handleFailure(JobEntity job, String errorMessage, long durationMs) {
+        return applyFailure(job, null, errorMessage, durationMs);
+    }
+
+    @Override
+    public String handleFailureIfLeaseHeld(JobEntity job, String expectedLeaseToken,
+                                          String errorMessage, long durationMs) {
+        return applyFailure(job, expectedLeaseToken, errorMessage, durationMs);
+    }
+
+    /**
+     * @param expectedLeaseToken when non-null, the state transition is applied only if the
+     *                           persisted lease still matches, atomically.
+     */
+    private String applyFailure(JobEntity job, String expectedLeaseToken,
+                                String errorMessage, long durationMs) {
         int attempt = job.getAttemptCount();
         int maxAttempts = job.getMaxAttempts() > 0 ? job.getMaxAttempts() : config.getRetry().getMaxAttempts();
+        boolean willRetry = attempt + 1 < maxAttempts;
+        long delayMs = willRetry ? retryPolicy.calculateDelayMs(attempt) : 0L;
 
+        if (willRetry) {
+            job.setStatus(JobStatus.RETRY_SCHEDULED);
+            job.setNextRunAt(Instant.now().plusMillis(delayMs));
+            job.setVisibleAt(null);
+            job.setLeaseOwner(null);
+            job.setLeaseToken(null);
+            job.setAttemptCount(attempt + 1);
+            job.setUpdatedAt(Instant.now());
+        } else {
+            job.setStatus(JobStatus.DLQ);
+            job.setVisibleAt(null);
+            job.setLeaseOwner(null);
+            job.setLeaseToken(null);
+            job.setNextRunAt(null);
+            job.setCompletedAt(Instant.now());
+            job.setResult("Max retries exceeded: " + errorMessage);
+            job.setUpdatedAt(Instant.now());
+        }
+
+        boolean persisted = expectedLeaseToken == null
+                ? saveUnfenced(job)
+                : jobRepo.saveIfLeaseHeld(job, expectedLeaseToken);
+
+        if (!persisted) {
+            log.warn("Job {} failure discarded - the lease was lost before the write", job.getId());
+            return null;
+        }
+
+        // Recorded only after the state transition succeeded, so the log never claims an
+        // attempt that a competing worker had already superseded.
         logRepo.save(JobExecutionLog.builder()
                 .jobId(job.getId())
                 .attempt(attempt)
@@ -49,18 +96,7 @@ public final class RetryServiceImpl implements RetryService {
                 .executedAt(Instant.now())
                 .build());
 
-        if (attempt + 1 < maxAttempts) {
-            long delayMs = retryPolicy.calculateDelayMs(attempt);
-            Instant nextRun = Instant.now().plusMillis(delayMs);
-            job.setStatus(JobStatus.RETRY_SCHEDULED);
-            job.setNextRunAt(nextRun);
-            job.setVisibleAt(null);
-            job.setLeaseOwner(null);
-            job.setLeaseToken(null);
-            job.setAttemptCount(attempt + 1);
-            job.setUpdatedAt(Instant.now());
-            jobRepo.save(job);
-
+        if (willRetry) {
             log.info("Retrying job {} (attempt {}/{}) in {}ms", job.getId(), attempt + 1, maxAttempts, delayMs);
             eventPublisher.publish(JobEvent.JOB_RETRY, JobEventData.builder()
                     .jobId(job.getId())
@@ -72,28 +108,24 @@ public final class RetryServiceImpl implements RetryService {
                     .timestamp(Instant.now())
                     .build());
             return "RETRY_SCHEDULED";
-        } else {
-            job.setStatus(JobStatus.DLQ);
-            job.setVisibleAt(null);
-            job.setLeaseOwner(null);
-            job.setLeaseToken(null);
-            job.setCompletedAt(Instant.now());
-            job.setResult("Max retries exceeded: " + errorMessage);
-            job.setUpdatedAt(Instant.now());
-            jobRepo.save(job);
-
-            log.warn("Job {} moved to DLQ after {} attempts", job.getId(), maxAttempts);
-            eventPublisher.publish(JobEvent.JOB_FAILED, JobEventData.builder()
-                    .jobId(job.getId())
-                    .jobType(job.getJobType())
-                    .producer(job.getProducer())
-                    .status("DLQ")
-                    .result("Max retries exceeded: " + (errorMessage != null ? errorMessage : ""))
-                    .attempt(attempt)
-                    .timestamp(Instant.now())
-                    .build());
-            return "DLQ";
         }
+
+        log.warn("Job {} moved to DLQ after {} attempts", job.getId(), maxAttempts);
+        eventPublisher.publish(JobEvent.JOB_FAILED, JobEventData.builder()
+                .jobId(job.getId())
+                .jobType(job.getJobType())
+                .producer(job.getProducer())
+                .status("DLQ")
+                .result("Max retries exceeded: " + (errorMessage != null ? errorMessage : ""))
+                .attempt(attempt)
+                .timestamp(Instant.now())
+                .build());
+        return "DLQ";
+    }
+
+    private boolean saveUnfenced(JobEntity job) {
+        jobRepo.save(job);
+        return true;
     }
 
     @Override

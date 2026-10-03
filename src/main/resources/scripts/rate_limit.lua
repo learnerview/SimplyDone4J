@@ -2,6 +2,7 @@ local key = KEYS[1]
 local now = tonumber(ARGV[1])
 local windowMs = tonumber(ARGV[2])
 local maxRequests = tonumber(ARGV[3])
+local member = ARGV[4]
 local windowStart = now - windowMs
 
 -- Remove expired entries
@@ -19,8 +20,14 @@ if count >= maxRequests then
     return {0, windowStart}
 end
 
--- Add current timestamp
-redis.call('ZADD', key, now, now)
+-- Add current request.
+--
+-- The member MUST be unique. Using the timestamp as both score and member made every
+-- request inside the same millisecond collapse onto one ZSET entry, so ZCARD stopped
+-- growing and a sub-millisecond burst was admitted regardless of the configured limit.
+-- The caller supplies a unique member per request.
+redis.call('ZADD', key, now, member)
+
 -- Return 1 (allowed) and the oldest timestamp in window
 local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
 local oldestScore = windowStart

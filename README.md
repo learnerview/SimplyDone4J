@@ -8,6 +8,13 @@
 
 **SimplyDone4J is a lightweight Java dependency (not a service) that brings reliable job scheduling, priority queues, automatic retries, rate limiting, lease-based execution, and webhook callbacks to any Spring Boot application — with zero infrastructure beyond Redis.**
 
+Built and tested on Spring Boot 4.1 / Java 21. Actuator and Micrometer are `optional`, and the auto-configuration keeps those types out of the core bean definitions, so the starter also loads cleanly on Spring Boot 3.x (verified against 3.2).
+
+With Spring Boot 4 the starter brings its own `RedisConnectionFactory` and Jackson 2
+`ObjectMapper` when the application has not configured Sentinel/Cluster or a
+`com.fasterxml` mapper — Boot 4 defaults to Jackson 3, so it no longer contributes
+one. If you *do* set either, yours is used instead.
+
 ---
 
 ### Quick Start
@@ -18,7 +25,7 @@
 <dependency>
     <groupId>io.github.learnerview</groupId>
     <artifactId>simplydone4j-spring-boot-starter</artifactId>
-    <version>2.0.1</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
@@ -94,7 +101,7 @@ That's it. Your jobs are queued in Redis, scheduled with weighted priority, retr
 | Priority queues | HIGH / NORMAL / LOW with weighted deficit scheduling | Limited | Supported |
 | Rate limiting | Built-in with Redis + in-memory fallback | Not built-in | Not built-in |
 | Setup | 1 dependency + Redis | DB schema + config | DB schema + config |
-| Footprint | ~15 KB jar | ~1.5 MB | ~500 KB |
+| Footprint | ~170 KB jar | ~1.5 MB | ~500 KB |
 
 You don't need a database, a separate worker process, or external infrastructure — just Redis, which you likely already have for caching.
 
@@ -109,7 +116,7 @@ You don't need a database, a separate worker process, or external infrastructure
 - **Lease-based execution** — jobs leased to workers; expired leases auto-recovered with token fencing
 - **Scheduled maintenance** — retry promoter and lease reaper run at configurable intervals
 - **Job events** — Spring `ApplicationEvent` published on every lifecycle transition
-- **Execution logs** — per-attempt history stored in Redis
+- **Execution logs** (opt-in) - per-attempt history in Redis, off by default because it is a debugging aid rather than engine state
 - **Dead-letter queue** — jobs exceeding max retries automatically moved to DLQ
 - **Graceful shutdown** — in-flight jobs complete before the application stops
 - **Health monitoring** — built-in metrics and status counts
@@ -126,7 +133,7 @@ You don't need a database, a separate worker process, or external infrastructure
 | Guide | Description |
 |---|---|
 | [Configuration Reference](docs/CONFIGURATION.md) | Complete property table, YAML examples, env vars, Redis HA, retention |
-| [User Guide](docs/GUIDE.md) | Handlers, submission, idempotency, lifecycle, retries, rate limiting, events, cancellation, progress, execution logs, monitoring |
+| [User Guide](docs/GUIDE.md) | Handlers, submission, idempotency, lifecycle, retries, rate limiting, events, cancellation, execution logs, monitoring |
 | [Production Deployment](docs/PRODUCTION.md) | Resource sizing, health checks, metrics, Docker/Compose, debugging |
 | [Architecture](docs/ARCHITECTURE.md) | Redis data model, algorithms (deficit WRR, backoff, Lua rate-limiter, circuit breaker, WATCH/MULTI claim, lease fencing), design decisions |
 | [Development](docs/DEVELOPMENT.md) | Local build/test, demo app, CI/CD, release process, project layout |
@@ -161,7 +168,7 @@ All properties → [Configuration Reference](docs/CONFIGURATION.md)
 
 Honest admission of trade-offs — not blockers, but considerations:
 
-1. **Orphan jobs on crash** — If the application crashes between saving the job hash to Redis and adding the job ID to the priority queue, the job exists in the hash store but not in any queue. These orphan jobs are self-healing: the idempotency lock expires after `idempotency-ttl-hours` (default 1 hour), allowing the caller to resubmit.
+1. **Orphan jobs on crash** — If the application crashes between saving the job hash to Redis and adding the job ID to the priority queue, the job exists in the hash store but not in any queue. The caller is unblocked once the idempotency lock expires after `idempotency-ttl-hours` (default 1 hour) and can resubmit, but note the orphan record itself is **not** cleaned up automatically: it stays `QUEUED` with no TTL, because no maintenance task scans the `QUEUED` index (the promoter only moves `RETRY_SCHEDULED` and the reaper only recovers `RUNNING`). This window is narrow — the crash has to land between the job hash write and the queue push.
 
 2. **Consumed idempotency ticket on crash** — If the application crashes after winning the idempotency `SETNX` lock but before saving the job, the idempotency key remains consumed for the lock's TTL duration. The caller receives no job ID and must retry after the TTL expires (default 1 hour). This is a fundamental trade-off of optimistic deduplication without distributed transactions.
 
@@ -177,7 +184,7 @@ Honest admission of trade-offs — not blockers, but considerations:
 
 8. **No multi-tenant isolation beyond key-prefix** — Sharing a Redis instance requires manual `key-prefix` configuration. No namespace isolation at the Redis data structure level.
 
-9. **DLQ is status-only** — Jobs with `DLQ` status are not moved to a separate Redis queue; they remain in the status index. No dedicated DLQ recovery API is provided (manual Redis intervention required).
+9. **DLQ is status-only** — Jobs with `DLQ` status are not moved to a separate Redis queue; they remain in the status index. A `DeadLetterService` offers explicit recovery (fail the job, or requeue as a fresh attempt) but requires an API or scheduler call: there is no automatic DLQ replay.
 
 10. **No job chaining** — Cannot express "run job B only if job A succeeds." No `dependsOn` field or event-based triggering for downstream jobs.
 

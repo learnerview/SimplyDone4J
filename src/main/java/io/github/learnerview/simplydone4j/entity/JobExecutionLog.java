@@ -1,8 +1,27 @@
 package io.github.learnerview.simplydone4j.entity;
 
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 import java.time.Instant;
 
-public final class JobExecutionLog {
+/**
+ * Append-only record of one attempt at a job.
+ *
+ * <p>Distinct from {@link JobEntity} on purpose. A job row holds current state and is
+ * overwritten on every transition; this holds what happened and is never modified, which
+ * is what makes per-attempt debugging possible after the job itself has moved on.</p>
+ *
+ * <p>Needs a no-arg constructor and setters because Jackson deserializes it from the
+ * stored JSON log.</p>
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class JobExecutionLog {
     private String id;
     private String jobId;
     private int attempt;
@@ -10,52 +29,4 @@ public final class JobExecutionLog {
     private String message;
     private Long durationMs;
     private Instant executedAt;
-
-    public JobExecutionLog() {}
-
-    private JobExecutionLog(Builder builder) {
-        this.id = builder.id;
-        this.jobId = builder.jobId;
-        this.attempt = builder.attempt;
-        this.status = builder.status;
-        this.message = builder.message;
-        this.durationMs = builder.durationMs;
-        this.executedAt = builder.executedAt;
-    }
-
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
-    public String getJobId() { return jobId; }
-    public void setJobId(String jobId) { this.jobId = jobId; }
-    public int getAttempt() { return attempt; }
-    public void setAttempt(int attempt) { this.attempt = attempt; }
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-    public String getMessage() { return message; }
-    public void setMessage(String message) { this.message = message; }
-    public Long getDurationMs() { return durationMs; }
-    public void setDurationMs(Long durationMs) { this.durationMs = durationMs; }
-    public Instant getExecutedAt() { return executedAt; }
-    public void setExecutedAt(Instant executedAt) { this.executedAt = executedAt; }
-
-    public static Builder builder() { return new Builder(); }
-
-    public static final class Builder {
-        private String id;
-        private String jobId;
-        private int attempt;
-        private String status;
-        private String message;
-        private Long durationMs;
-        private Instant executedAt;
-        private Builder() {}
-        public Builder id(String id) { this.id = id; return this; }
-        public Builder jobId(String jobId) { this.jobId = jobId; return this; }
-        public Builder attempt(int attempt) { this.attempt = attempt; return this; }
-        public Builder status(String status) { this.status = status; return this; }
-        public Builder message(String message) { this.message = message; return this; }
-        public Builder durationMs(Long durationMs) { this.durationMs = durationMs; return this; }
-        public Builder executedAt(Instant executedAt) { this.executedAt = executedAt; return this; }
-        public JobExecutionLog build() { return new JobExecutionLog(this); }
-    }
 }
