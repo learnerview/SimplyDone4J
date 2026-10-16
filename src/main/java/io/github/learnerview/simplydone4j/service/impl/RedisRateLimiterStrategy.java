@@ -39,7 +39,7 @@ public class RedisRateLimiterStrategy implements RateLimiterStrategy {
     private final SimplyDoneProperties config;
     private final String keyPrefix;
     private final RateLimiterCircuitBreaker circuitBreaker;
-    private DefaultRedisScript<List> rateLimitScript;
+    private DefaultRedisScript<List<Long>> rateLimitScript;
 
     /**
      * Guarantees a distinct ZSET member per submission.
@@ -77,7 +77,7 @@ public class RedisRateLimiterStrategy implements RateLimiterStrategy {
             rateLimitScript = new DefaultRedisScript<>();
             rateLimitScript.setScriptSource(new org.springframework.scripting.support.ResourceScriptSource(
                     new ClassPathResource("scripts/rate_limit.lua")));
-            rateLimitScript.setResultType(List.class);
+            rateLimitScript.setResultType((Class<List<Long>>)(Class<?>)List.class);
             rateLimitScript.getScriptAsString(); // validate the script is readable
             circuitBreaker.onScriptLoaded();
         } catch (Exception e) {

@@ -29,7 +29,7 @@
 
 | Key | Type | Score / Content | Purpose |
 |---|---|---|---|
-| `{p}:queue:{priority}` | ZSET | `scheduledAtEpochMs` | Delayed-ready priority queues |
+| `{p}:queue:{priority}` | ZSET | `scheduledAtEpochMs` | Delayed-ready priority queues. Capacity (`queue.max-depth`) is enforced **per queue**, not in total |
 | `{p}:job:{id}` | HASH | JobEntity fields | Job record, TTL on terminal (`ttl-hours` + `ttl-days`) |
 | `{p}:idx:status:{status}` | ZSET | `nextRunAt`/`visibleAt`; terminal members scored `updatedAt` | Secondary index for promoter/reaper, and for `countByStatus` on terminal states |
 | `{p}:idx:status:priority:{s}:{pr}` | ZSET | same | Per-priority index |
@@ -120,7 +120,31 @@ MULTI
 EXEC → empty = race lost, return 0
 ```
 
-### 6. Lease Fencing Tokens
+### 6. Atomic Capacity Admission (`RedisQueueRepository.java:30-38, 60-66`)
+
+```lua
+local key = KEYS[1]
+if redis.call('ZCARD', key) >= tonumber(ARGV[1]) then return 0 end
+redis.call('ZADD', key, tonumber(ARGV[3]), ARGV[2])
+return 1
+```
+
+A plain `ZCARD` followed by `ZADD` is two commands, so two concurrent submits could both read
+`maxDepth - 1` and both write, overshooting the cap. Running the test and the write inside one
+script removes the interleaving. The capacity is checked on the **target** queue, not the sum
+across priorities: a sum would need a script keyed on every queue, and Redis Cluster rejects a
+script whose keys do not share a hash slot, so a per-queue check is the atomic option that holds
+on standalone, Sentinel and Cluster alike. `JobSubmissionServiceImpl` maps a `false` result to
+`QueueFullException` and compensates by deleting the job hash and releasing the idempotency key.
+
+### 7. Atomic Status Transition — Cancel (`RedisJobRepository.transitionStatusIfCurrent`)
+
+`cancelJob` uses the same `WATCH`/`MULTI`/`EXEC` compare-and-write as the claim: it reads the
+stored status and, only if it still equals `expected`, commits the new status plus the index
+moves. If a worker claimed the job in between, `EXEC` returns `null` and the cancel loses
+instead of overwriting a `RUNNING` job as `CANCELLED`.
+
+### 8. Lease Fencing Tokens
 
 - Monotonic token issued by `FencingTokenSequence` (Redis `INCR`) at claim time, not a UUID — a fencing token must be ordered, so that a downstream store can reject a late write from a superseded epoch.
 - Before writing SUCCESS/failure, the executor captures the token it was issued and re-reads the job, then passes the *issued* token to `saveIfLeaseHeld` for an atomic compare-and-write (`JobExecutorServiceImpl`).
@@ -159,9 +183,20 @@ EXEC → empty = race lost, return 0
 | `JobEntity.id` | Service layer (`JobSubmissionServiceImpl`) | Caller needs ID immediately for response, enqueue, dedup |
 | `JobExecutionLog.id` | Repository layer (`RedisJobExecutionLogRepository.save`) | Fire-and-forget audit data; no external dependency |
 
-### CallerRunsPolicy Backpressure
+### AbortPolicy Dispatch (not CallerRunsPolicy)
 
-Thread pool uses `CallerRunsPolicy` — when queue is full, the submitting thread executes the task. This provides natural backpressure without rejecting work or dropping jobs.
+The worker pool uses `ThreadPoolExecutor.AbortPolicy` (`SimplyDoneAutoConfiguration.jobTaskExecutor`),
+deliberately **not** `CallerRunsPolicy`. Submission happens on the `@Scheduled` thread
+(`SchedulerEngine.poll`), so `CallerRuns` would run the handler *inline on the scheduler thread*
+whenever the pool is saturated. A handler may run for `defaultTimeoutSeconds`, parking that
+thread — and `SchedulerEngine.poll`, `WorkerMaintenanceServiceImpl.promoteRetries` and
+`recoverExpiredLeases` all share Spring's single scheduled-task thread, so a busy pool would
+silently stop lease reaping and retry promotion too.
+
+Aborting is safe because `SchedulerEngine` restores any claimed job whose dispatch fails:
+`claimReady` removes the id from the priority ZSET, and `executeClaimedJobOrRestore` re-enqueues
+it at the current time if the executor rejects it. A rejection therefore means "not now, still
+on the queue", not "lost".
 
 ### Timeout Enforcement
 
@@ -192,7 +227,7 @@ This is a known limitation (see [Known Limitations](#known-limitations)).
 
 | Component | Pool | Queue | Policy |
 |---|---|---|---|
-| Job execution | `ThreadPoolTaskExecutor` (core=4, max=8, queue=100) | Bounded (100) | CallerRunsPolicy |
+| Job execution | `ThreadPoolTaskExecutor` (core=4, max=8, queue=100) | Bounded (100) | AbortPolicy (claimed job restored on rejection) |
 | Scheduler | Thread pool (1 by default; `spring.task.scheduling.pool.size` settable) | — | — |
 | Maintenance | `@Scheduled` on a single scheduler thread each | — | — |
 

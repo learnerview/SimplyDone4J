@@ -81,15 +81,14 @@ public final class RedisJobRepository implements JobRepository {
         if (expectedLeaseToken == null) return false;
 
         for (int attempt = 0; attempt < FENCED_WRITE_ATTEMPTS; attempt++) {
-            @SuppressWarnings("unchecked")
             Integer outcome = redis.execute(new SessionCallback<Integer>() {
                 // SessionCallback declares execute(RedisOperations<K,V>), so the generic
                 // signature is fixed by the framework. Every command issued here targets
                 // this job's String->String hash, so narrow once and then work typed.
             @Override
-            @SuppressWarnings("unchecked")
             public <K, V> Integer execute(RedisOperations<K, V> genericOps) throws DataAccessException {
                 // See saveIfLeaseHeld: narrow the framework's generic signature once.
+                @SuppressWarnings("unchecked")
                 RedisOperations<String, String> ops =
                         (RedisOperations<String, String>) (RedisOperations<?, ?>) genericOps;
                     String key = jobKey(job.getId());
@@ -274,6 +273,77 @@ public final class RedisJobRepository implements JobRepository {
         return findById(jobId);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Deletes the job hash and purges the id from every status index. Leaving a member
+     * behind would make {@code countByStatus} and {@code findByStatus} report a job whose
+     * record no longer exists.
+     */
+    @Override
+    public void delete(String jobId) {
+        redis.delete(jobKey(jobId));
+        for (JobStatus s : JobStatus.values()) {
+            redis.opsForZSet().remove(statusIndexKey(s), jobId);
+            for (JobPriority p : JobPriority.values()) {
+                redis.opsForZSet().remove(statusPriorityIndexKey(s, p), jobId);
+            }
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Uses the same WATCH/MULTI/EXEC compare-and-write as {@link #saveIfLeaseHeld}: the
+     * status is compared and, only on a match, the new status plus the derived index moves
+     * are committed in one transaction. {@code EXEC} returning {@code null} means a
+     * concurrent writer touched the key, which is a loss for this caller — the losing
+     * cancel must not clobber the worker's {@code RUNNING} transition.
+     */
+    @Override
+    public boolean transitionStatusIfCurrent(String jobId, JobStatus expected, JobStatus target) {
+        if (expected == null || target == null) return false;
+        return Boolean.TRUE.equals(redis.execute(new SessionCallback<Boolean>() {
+            @Override
+            public <K, V> Boolean execute(RedisOperations<K, V> genericOps) throws DataAccessException {
+                // SessionCallback fixes the generic signature; every command addresses this
+                // job's String->String hash, so narrow once and work typed.
+                @SuppressWarnings("unchecked")
+                RedisOperations<String, String> ops =
+                        (RedisOperations<String, String>) (RedisOperations<?, ?>) genericOps;
+                String key = jobKey(jobId);
+                ops.watch(key);
+
+                Map<Object, Object> entries = ops.opsForHash().entries(key);
+                if (entries.isEmpty()) {
+                    ops.unwatch();
+                    return false;
+                }
+
+                Map<String, String> stringMap = new HashMap<>();
+                entries.forEach((k, v) -> stringMap.put((String) k, (String) v));
+                JobEntity job = objectMapper.convertValue(stringMap, JobEntity.class);
+
+                if (job.getStatus() != expected) {
+                    ops.unwatch();
+                    return false;
+                }
+
+                job.setStatus(target);
+                job.setUpdatedAt(Instant.now());
+
+                Map<String, String> fields = fieldsFor(job);
+                ops.multi();
+                writeFields(ops, key, job, fields);
+                applyIndexWrites(ops, job);
+                applyRetention(ops, key, job);
+
+                List<Object> execResult = ops.exec();
+                return execResult != null && !execResult.isEmpty();
+            }
+        }));
+    }
+
     @Override
     public List<JobEntity> findReadyToRun(JobStatus status, Instant before, int limit) {
         Set<String> jobIds = redis.opsForZSet().rangeByScore(statusIndexKey(status), 0, before.toEpochMilli(), 0, limit);
@@ -294,18 +364,17 @@ public final class RedisJobRepository implements JobRepository {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public int claimForExecution(String jobId, String leaseToken, String workerId, Instant visibleUntil,
                                   Instant now, JobStatus fromStatus, JobStatus toStatus) {
         return redis.execute(new SessionCallback<Integer>() {
             // See saveIfLeaseHeld: SessionCallback fixes the generic signature, so narrow
             // once here. Every command below targets this job's String->String hash.
             @Override
-            @SuppressWarnings("unchecked")
             public <K, V> Integer execute(RedisOperations<K, V> genericOps) throws DataAccessException {
                 // SessionCallback fixes this signature as generic. Every command here
                 // addresses this job's String->String hash, so narrow once via cast and
                 // then work in typed operations throughout.
+                @SuppressWarnings("unchecked")
                 RedisOperations<String, String> ops =
                         (RedisOperations<String, String>) (RedisOperations<?, ?>) genericOps;
                 String key = jobKey(jobId);

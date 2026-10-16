@@ -2,81 +2,105 @@
 
 ## Requirements
 
-- Java 21+
-- Maven 3.8+
+- **Java 21+** (enforced at build time by `maven-enforcer-plugin`)
+- **Maven 3.8+** (also enforced)
+- **Redis 6/7** — optional, and only for the real-Redis integration tests and live experiments
 
-No Redis or Docker is needed to build or test: every repository test drives the Redis client through a Mockito mock, and the rest are plain unit tests. A local Redis is only needed to run the demo application or to experiment live.
+No Redis or Docker is needed to build or to run the default test suite. Most tests drive the
+Redis client through a Mockito mock; the real-Redis tests are **skipped automatically** when no
+server is reachable (see [Test Breakdown](#test-breakdown)).
 
 ---
 
 ## Build & Test
 
 ```bash
-# Quick build (skip tests)
+# Quick build without tests
 mvn clean install -DskipTests
 
-# Full suite
+# Full build with the enforcer (Java 21 / Maven 3.8+) and all tests
 mvn clean verify
 ```
 
-**Test breakdown:**
-- Unit tests with Mockito: handler registry, mappers, retry policies, circuit breaker, DLQ, overlap guard
-- Webhook tests: retry budget, backoff, JSON body escaping, failure isolation
-- Redis repository tests: jobs, queues, execution logs, uniqueness guard (mocked `StringRedisTemplate`)
-- Lease fencing tests: expired lease recovery, token fencing verification
-- Stress tests: timeout stress, mixed load, variable duration, throughput
+To run the real-Redis integration tests, start a Redis and point the suite at it:
 
-All tests pass with 0 failures, 0 errors.
+```bash
+docker run -d --name redis-it -p 16379:6379 redis:7-alpine
+mvn test                       # picks up localhost:16379 by default
+
+# or override the endpoint
+mvn test -Dit.redis.host=localhost -Dit.redis.port=6379
+# equivalently via environment variables:
+IT_REDIS_HOST=localhost IT_REDIS_PORT=6379 mvn test
+```
+
+### Test Breakdown
+
+- **Unit tests (Mockito):** handler registry, mappers, retry policies, circuit breaker, DLQ,
+  overlap guard, submission, executor, webhook retry/backoff/JSON escaping, metrics, health,
+  auto-configuration and optional-dependency isolation.
+- **Redis repository tests (mocked `StringRedisTemplate`):** jobs, queues, execution logs,
+  uniqueness guard, terminal status index.
+- **Real-Redis integration tests:** `*RealRedisTest` classes that pin behavior a mock cannot
+  prove — atomic per-queue admission, `WATCH`/`MULTI` claim, lease fencing, the retry-promotion
+  race, and rate limiting. **These execute 0 tests (abort) when no Redis is reachable.**
+- **Stress tests:** timeout, mixed load, variable duration and throughput, using in-JVM fakes.
+
+**Measured on this checkout (no Redis available):** `213 tests run, 0 failures, 0 errors,
+0 skipped`, with 6 real-Redis classes aborted — i.e. 21 test methods were not exercised. Run the
+suite against a real Redis to cover them.
+
+This makes the suite honest but not self-sufficient: the atomicity guarantees the documentation
+leans on are proven only where a live Redis is provided.
 
 ---
 
 ## Local Development
 
-### Running the Demo with Local Redis
+### Running Against a Local Redis
 
 ```bash
 docker run -d --name redis -p 6379:6379 redis:7-alpine
-```
-
-Then build the library and the demo:
-
-```bash
 mvn clean install -DskipTests
-cd ../simplydone4j-demo
-mvn clean package
-java -jar target/simplydone4j-demo-1.0.0.jar
 ```
 
-Read queue statistics programmatically with `MonitoringService.getStats()` (depths and per-status counts). See the sibling `simplydone4j-demo` project for a runnable end-to-end example.
+Read queue statistics programmatically with `MonitoringService.getStats()` (per-priority depths
+and per-status counts). This project is the library itself; use it from your own Spring Boot
+application or from a sibling demo project that depends on the starter.
 
 ### IDE Setup
 
-- Open as Maven project
-- Enable annotation processing (for `spring-boot-configuration-processor`)
+- Open as a Maven project.
+- Enable annotation processing (the `spring-boot-configuration-processor`).
 
 ---
 
 ## CI Workflow (`.github/workflows/ci.yml`)
 
-Runs on every push to `main`/`develop` and on pull requests to `main`:
+Runs on pushes to `main`/`develop` and on pull requests to `main`:
 
-1. **Setup**: Java 21, Maven cache
-2. **Build**: `mvn clean verify`
-3. The enforcer plugin (Java 21 / Maven 3.8+) runs as part of `verify`
+1. Checkout, set up Temurin **Java 21**, enable Maven caching.
+2. `mvn -B clean verify` (the enforcer runs as part of `verify`).
+
+CI does **not** currently provision a Redis service, so the `*RealRedisTest` classes abort there
+exactly as they do locally without one.
 
 ---
 
 ## Release Workflow (`.github/workflows/release.yml`)
 
-Triggers on GitHub release creation:
+Triggers when a GitHub release is created:
 
-1. **Build**: `mvn clean verify`
-2. **Sign**: GPG-sign artifacts (`maven-gpg-plugin`)
-3. **Deploy**: Publish to Maven Central via `central-publishing-maven-plugin`
+1. Import the GPG key.
+2. Set up Java 21 and the Central Portal server credentials.
+3. `mvn -B clean verify`.
+4. `mvn -B deploy -Prelease -DskipTests` — the `release` profile builds sources + javadoc jars,
+   GPG-signs the artifacts and publishes to Maven Central via `central-publishing-maven-plugin`
+   (`autoPublish=false`).
 
 **Required secrets:**
-- `MAVEN_USERNAME` / `MAVEN_PASSWORD` (Central Portal token)
-- `GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE` (GPG signing, used by the release workflow)
+- `MAVEN_USERNAME` / `MAVEN_PASSWORD` — Central Portal token
+- `GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE` — GPG signing
 
 ---
 
@@ -95,34 +119,37 @@ SimplyDone4J/
 ├── src/
 │   ├── main/
 │   │   ├── java/io/github/learnerview/simplydone4j/
-│   │   │   ├── autoconfigure/       # Properties & auto-config classes
-│   │   │   ├── dto/                 # Request/Response DTOs
-│   │   │   ├── entity/              # JobEntity, JobExecutionLog
-│   │   │   ├── event/               # JobEvent, JobEventData, JobEventPublisher
-│   │   │   ├── exception/           # Custom exceptions
-│   │   │   ├── handler/             # JobHandler, JobContext, HandlerRegistry
-│   │   │   ├── mapper/              # JobMapper (JSON ↔ Entity)
-│   │   │   ├── metrics/             # JobMetrics, QueueDepthSampler
-│   │   │   ├── model/               # JobPriority, JobStatus enums
-│   │   │   ├── repository/          # Interfaces + Redis implementations
-│   │   │   ├── service/             # Service interfaces + impl packages
-│   │   │   │   └── impl/            # All service implementations
+│   │   │   ├── autoconfigure/   # @ConfigurationProperties + auto-config classes
+│   │   │   ├── dto/             # Request/Response DTOs
+│   │   │   ├── entity/          # JobEntity, JobExecutionLog
+│   │   │   ├── event/           # JobEvent, JobEventData, JobEventPublisher
+│   │   │   ├── exception/       # Custom exceptions
+│   │   │   ├── handler/         # JobHandler, JobContext, HandlerRegistry
+│   │   │   ├── health/          # SimplyDoneHealthIndicator
+│   │   │   ├── mapper/          # JobMapper (JSON ↔ Entity)
+│   │   │   ├── metrics/         # JobMetrics, MicrometerJobMetrics, QueueDepthSampler
+│   │   │   ├── model/           # JobPriority, JobStatus enums
+│   │   │   ├── repository/      # Interfaces + Redis implementations
+│   │   │   └── service/         # Service interfaces + impl/ implementations
 │   │   └── resources/
+│   │       ├── META-INF/        # AutoConfiguration.imports, additional metadata JSON
 │   │       └── scripts/rate_limit.lua
 │   └── test/
-│       └── java/...                 # tests
-├── docs/                            # This documentation
+│       └── java/...             # unit + *RealRedisTest integration tests
+├── docs/                        # Documentation
+├── .github/workflows/           # CI + release
 ├── pom.xml
-└── README.md
+├── README.md
+└── SECURITY.md
 ```
 
 ---
 
 ## Adding a New Feature
 
-1. Create feature branch: `git checkout -b feature/my-feature`
-2. Implement with tests (unit tests; mock the `StringRedisTemplate` for repository logic)
-3. Update relevant docs in `docs/`
-4. Open PR with description of changes
-5. CI must pass (all tests green)
-6. Squash-merge to `main`
+1. Create a feature branch: `git checkout -b feature/my-feature`.
+2. Implement with tests (mock `StringRedisTemplate` for repository logic; add a `*RealRedisTest`
+   when the behavior depends on Redis atomicity).
+3. Update the relevant docs in `docs/` (and the property tables if you add configuration).
+4. Open a PR describing the change; CI (`mvn -B clean verify`) must pass.
+5. Squash-merge to `main`.

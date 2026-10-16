@@ -6,8 +6,16 @@ import io.github.learnerview.simplydone4j.service.WebhookService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
@@ -65,6 +73,11 @@ public class HttpWebhookServiceImpl implements WebhookService {
 
         String callbackUrl = job.getCallbackUrl();
         if (callbackUrl == null || callbackUrl.isBlank()) return;
+
+        if (!isValidCallbackUrl(callbackUrl)) {
+            log.warn("Callback URL blocked for job {}: {}", job.getId(), callbackUrl);
+            return;
+        }
 
         final String body;
         try {
@@ -183,6 +196,43 @@ public class HttpWebhookServiceImpl implements WebhookService {
                 + "\",\"result\":" + (job.getResult() != null ? "\"" + escapeJson(job.getResult()) + "\"" : "null")
                 + (errorMessage != null ? ",\"error\":\"" + escapeJson(errorMessage) + "\"" : "")
                 + "}";
+    }
+
+    /**
+     * Validate a callback URL to prevent SSRF attacks.
+     *
+     * <p>Only http:// and https:// schemes are allowed. The hostname is resolved via DNS
+     * and the resolved address is checked: loopback, link-local, site-local, and any
+     * other private/unicast addresses are rejected. This defends against callbacks to
+     * internal services and cloud metadata endpoints.
+     */
+    private static boolean isValidCallbackUrl(String url) {
+        try {
+            URI uri = new URI(url);
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                return false;
+            }
+            String host = uri.getHost();
+            if (host == null || host.isBlank()) {
+                return false;
+            }
+            InetAddress[] addresses = InetAddress.getAllByName(host);
+            for (InetAddress addr : addresses) {
+                if (addr.isAnyLocalAddress()
+                        || addr.isLoopbackAddress()
+                        || addr.isLinkLocalAddress()
+                        || addr.isSiteLocalAddress()) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (IllegalArgumentException | java.net.URISyntaxException e) {
+            // Malformed URL — reject.
+            return false;
+        } catch (UnknownHostException e) {
+            return false;
+        }
     }
 
     private static String escapeJson(String value) {

@@ -51,7 +51,7 @@ class HttpWebhookServiceImplTest {
                 .status(JobStatus.SUCCESS)
                 .priority(JobPriority.NORMAL)
                 .payload("{}")
-                .callbackUrl("https://example.test/hook")
+                .callbackUrl("https://example.com/hook")
                 .build();
     }
 
@@ -228,7 +228,7 @@ class HttpWebhookServiceImplTest {
 
         JobEntity job = JobEntity.builder()
                 .id("job-1").jobType("t").status(JobStatus.SUCCESS)
-                .callbackUrl("https://example.test/hook")
+                .callbackUrl("https://example.com/hook")
                 .result("said \"hi\"\nthen left")
                 .build();
 

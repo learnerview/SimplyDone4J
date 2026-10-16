@@ -7,6 +7,8 @@ import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +16,28 @@ import java.util.Optional;
 import java.util.Set;
 
 public final class RedisQueueRepository implements QueueRepository {
-        private final StringRedisTemplate redis;
+
+    /**
+     * Capacity-checked enqueue in one atomic round trip.
+     *
+     * <p>A plain {@code ZCARD} followed by {@code ZADD} is two commands: two submits can
+     * both read {@code maxDepth - 1} and both write, overshooting the cap. Running the
+     * test and the write inside one script means Redis executes them with no interleaving.
+     *
+     * <p>{@code ARGV} order is max depth, job id, score. The target queue is the only key,
+     * so the script is safe under Redis Cluster where keys must share a hash slot.
+     */
+    private static final RedisScript<Long> ENQUEUE_IF_UNDER_CAPACITY_SCRIPT = new DefaultRedisScript<>("""
+            local key = KEYS[1]
+            local maxDepth = tonumber(ARGV[1])
+            if redis.call('ZCARD', key) >= maxDepth then
+                return 0
+            end
+            redis.call('ZADD', key, tonumber(ARGV[3]), ARGV[2])
+            return 1
+            """, Long.class);
+
+    private final StringRedisTemplate redis;
     private final String queuePrefix;
 
     public RedisQueueRepository(StringRedisTemplate redis, SimplyDoneProperties props) {
@@ -35,6 +58,14 @@ public final class RedisQueueRepository implements QueueRepository {
     }
 
     @Override
+    public boolean enqueueIfUnderCapacity(String jobId, JobPriority priority, long scheduledAtEpochMs,
+                                          long maxDepth) {
+        Long result = redis.execute(ENQUEUE_IF_UNDER_CAPACITY_SCRIPT, List.of(queueKey(priority)),
+                String.valueOf(maxDepth), jobId, String.valueOf(scheduledAtEpochMs));
+        return result != null && result == 1L;
+    }
+
+    @Override
     public Optional<String> claimNextReady(JobPriority priority) {
         return claimReady(priority, 1).stream().findFirst();
     }
@@ -48,11 +79,13 @@ public final class RedisQueueRepository implements QueueRepository {
         return redis.execute(new SessionCallback<List<String>>() {
             @Override
             @SuppressWarnings("unchecked")
-            public List<String> execute(RedisOperations ops) throws DataAccessException {
+            public <K, V> List<String> execute(RedisOperations<K, V> genericOps) throws DataAccessException {
+                @SuppressWarnings("unchecked")
+                RedisOperations<String, String> ops =
+                        (RedisOperations<String, String>) (RedisOperations<?, ?>) genericOps;
                 ops.watch(key);
                 Set<ZSetOperations.TypedTuple<String>> candidates =
-                        ((ZSetOperations<String, String>) ops.opsForZSet())
-                                .rangeByScoreWithScores(key, 0, now, 0, limit);
+                        ops.opsForZSet().rangeByScoreWithScores(key, 0, now, 0, limit);
 
                 if (candidates == null || candidates.isEmpty()) {
                     ops.unwatch();

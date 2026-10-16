@@ -46,10 +46,14 @@ public class RedisIdempotencyServiceImpl implements IdempotencyService {
         String fullKey = keyPrefix + ":idempotency:" + producer + ":" + idempotencyKey;
         // Compare-and-delete via WATCH so a concurrent resubmission that re-created the
         // key under the same job id cannot have its lock deleted out from under it.
+        @SuppressWarnings({"unchecked","rawtypes"})
         Boolean released = redis.execute(new SessionCallback<Boolean>() {
             @Override
             @SuppressWarnings("unchecked")
-            public Boolean execute(RedisOperations ops) throws DataAccessException {
+            public <K, V> Boolean execute(RedisOperations<K, V> genericOps) throws DataAccessException {
+                @SuppressWarnings("unchecked")
+                RedisOperations<String, String> ops =
+                        (RedisOperations<String, String>) (RedisOperations<?, ?>) genericOps;
                 ops.watch(fullKey);
                 String current = (String) ops.opsForValue().get(fullKey);
                 if (!jobId.equals(current)) {

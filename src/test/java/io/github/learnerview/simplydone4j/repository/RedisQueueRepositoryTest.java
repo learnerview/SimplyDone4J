@@ -13,6 +13,7 @@ import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -68,6 +69,39 @@ class RedisQueueRepositoryTest {
 
             verify(zSetOps).add("sd4j-test:queue:high", "job-early", 100L);
             verify(zSetOps).add("sd4j-test:queue:high", "job-late", 200L);
+        }
+    }
+
+    @Nested
+    class EnqueueIfUnderCapacity {
+
+        @Test
+        void shouldEnqueueInOneAtomicScriptWhenUnderCapacity() {
+            when(redis.execute(any(RedisScript.class), any(List.class), anyString(), anyString(), anyString()))
+                    .thenReturn(1L);
+
+            assertTrue(repo.enqueueIfUnderCapacity("job-1", JobPriority.HIGH, 1000L, 10L));
+
+            verify(redis).execute(any(RedisScript.class), eq(List.of("sd4j-test:queue:high")),
+                    eq("10"), eq("job-1"), eq("1000"));
+        }
+
+        @Test
+        void shouldRefuseWithoutWritingWhenAtCapacity() {
+            when(redis.execute(any(RedisScript.class), any(List.class), anyString(), anyString(), anyString()))
+                    .thenReturn(0L);
+
+            assertFalse(repo.enqueueIfUnderCapacity("job-1", JobPriority.NORMAL, 1000L, 1L),
+                    "a full queue must report refusal so the caller can raise QueueFullException");
+            verify(zSetOps, never()).add(anyString(), anyString(), anyDouble());
+        }
+
+        @Test
+        void shouldTreatANullScriptResultAsRefused() {
+            when(redis.execute(any(RedisScript.class), any(List.class), anyString(), anyString(), anyString()))
+                    .thenReturn(null);
+
+            assertFalse(repo.enqueueIfUnderCapacity("job-1", JobPriority.LOW, 1000L, 5L));
         }
     }
 
