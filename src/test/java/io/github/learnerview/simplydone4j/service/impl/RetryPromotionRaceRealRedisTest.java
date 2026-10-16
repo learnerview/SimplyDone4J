@@ -119,7 +119,7 @@ class RetryPromotionRaceRealRedisTest {
         assertEquals(1, instanceBView.size(), "precondition: both instances see the due retry");
 
         WorkerMaintenanceServiceImpl instanceA =
-                new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, nullRetryService(), props);
+                new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, nullRetryService());
         instanceA.promoteRetries();
 
         // The scheduler claims it, exactly as SchedulerEngine does: claimReady takes the id
@@ -134,7 +134,7 @@ class RetryPromotionRaceRealRedisTest {
 
         // Instance B now promotes its stale copy.
         WorkerMaintenanceServiceImpl instanceB =
-                new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, nullRetryService(), props);
+                new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, nullRetryService());
         instanceB.promoteRetries();
 
         JobEntity after = jobRepo.findById("job-1").orElseThrow();
@@ -177,7 +177,7 @@ class RetryPromotionRaceRealRedisTest {
     void promotionStillEnqueuesNormally() {
         seedRetryScheduledJob("job-2");
 
-        new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, nullRetryService(), props)
+        new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, nullRetryService())
                 .promoteRetries();
 
         JobEntity after = jobRepo.findById("job-2").orElseThrow();

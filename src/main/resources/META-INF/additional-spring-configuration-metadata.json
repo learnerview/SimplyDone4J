@@ -139,7 +139,7 @@
       "name": "simplydone4j.queue.max-depth",
       "type": "java.lang.Long",
       "defaultValue": 10000,
-      "description": "Maximum total queue depth across all priorities."
+      "description": "Maximum depth of each priority queue individually, not the sum across priorities. Enforced atomically per target queue, so one full priority queue rejects only that priority while the others keep accepting. Worst-case retained total is 3x this value."
     },
     {
       "name": "simplydone4j.executor.core-pool-size",

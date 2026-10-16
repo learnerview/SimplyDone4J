@@ -8,12 +8,12 @@ This guide covers the core APIs and patterns for working with SimplyDone4J in yo
 
 Handlers implement the `JobHandler` functional interface:
 
-``java
+```java
 @FunctionalInterface
 public interface JobHandler {
     String handle(JobContext context) throws Exception;
 }
-``
+```
 
 The return value (`String`) is stored as the job result and sent to webhooks/callbacks.
 
@@ -34,9 +34,12 @@ The return value (`String`) is stored as the job result and sent to webhooks/cal
 | `getProgress()` | Get progress (0.0–1.0) if a `ProgressCallback` is set |
 | `setProgress(double percent, String message)` | Set progress if a `ProgressCallback` is set |
 
+> Progress reporting is currently **not wired**: `setProgress(...)` is a no-op and `getProgress()`
+> always returns `0.0`. See [section 10](#10-cancellation--progress).
+
 ### Registering Handlers
 
-``java
+```java
 @Component
 public class MyHandlers {
 
@@ -61,7 +64,7 @@ public class MyHandlers {
         });
     }
 }
-``
+```
 
 ---
 
@@ -71,56 +74,59 @@ Inject `JobSubmissionService` and call `submit(producer, request)`.
 
 ### Minimal Request
 
-``java
+```java
 JobSubmissionRequest req = new JobSubmissionRequest();
 req.setJobType("send-email");
 req.setIdempotencyKey("email-001");
 
 JobSubmissionResponse res = submissionService.submit("my-app", req);
 // res.getJobId() → UUID, res.getStatus() → "QUEUED"
-``
+```
 
 ### With Payload
 
-``java
+```java
 req.setPayload(Map.of(
     "to", "user@example.com",
     "subject", "Welcome!",
     "template", "welcome-email"
 ));
-``
+```
 
 ### Scheduled Execution
 
-``java
+```java
 req.setNextRunAt(Instant.now().plusSeconds(3600)); // run in 1 hour
-``
+```
 
 ### Custom Priority
 
-``java
+```java
 req.setPriority("HIGH"); // "HIGH", "NORMAL" (default), or "LOW"
-``
+```
 
 ### Custom Retry Count
 
-``java
+```java
 req.setMaxAttempts(10);
-``
+```
 
 ### Callback URL
 
-``java
+```java
 req.setCallbackUrl("https://myapp.com/webhooks/job-complete");
-``
+```
 
 ### Timeout
 
-``java
+```java
 req.setTimeoutSeconds(30); // execution timeout
-``
+```
 
 ### Full Request Fields
+
+Validation: `jobType` and `idempotencyKey` are `@NotBlank`; `maxAttempts` and `timeoutSeconds`
+are `@Min(1)`; `uniqueKey` is limited to 200 characters.
 
 | Field | Required | Type | Description |
 |---|---|---|---|
@@ -138,9 +144,10 @@ req.setTimeoutSeconds(30); // execution timeout
 
 ## 3. Idempotency
 
-Submitting the same `producer + idempotencyKey` returns the existing job instead of creating a duplicate:
+Submitting the same `producer + idempotencyKey` returns the existing job instead of creating a
+duplicate:
 
-``java
+```java
 JobSubmissionRequest req = new JobSubmissionRequest();
 req.setJobType("send-email");
 req.setIdempotencyKey("order-456");
@@ -148,15 +155,24 @@ req.setIdempotencyKey("order-456");
 JobSubmissionResponse res1 = submissionService.submit("my-app", req);
 JobSubmissionResponse res2 = submissionService.submit("my-app", req);
 // res2.getJobId().equals(res1.getJobId()) → true
-``
+```
 
-**Important:** If the application crashes after winning the idempotency `SETNX` lock but before saving the job, the idempotency key remains consumed for the lock's TTL duration (default 1 hour). The caller receives no job ID and must retry after the TTL expires. This is a fundamental trade-off of optimistic deduplication without distributed transactions. Consider setting `idempotency-ttl-hours` appropriately for your tolerance.
+The service performs a **read-only lookup first**, before charging the rate limit or taking the
+lock. A retry of an already-accepted job therefore returns the stored result even if the queue has
+since filled or the producer is now rate limited. Only if no job is found does it charge the limit
+and take the Redis `SETNX` lock.
+
+**Important:** If the application crashes after winning the idempotency `SETNX` lock but before
+saving the job, the idempotency key remains consumed for the lock's TTL duration (default 1 hour,
+floored at 1 hour). The caller receives no job ID and must retry after the TTL expires. This is a
+fundamental trade-off of optimistic deduplication without distributed transactions. Consider
+setting `idempotency-ttl-hours` appropriately for your tolerance.
 
 ---
 
 ## 4. Job Lifecycle
 
-``
+```
 QUEUED → RUNNING ──→ SUCCESS
   │         │
   │         ├──→ RETRY_SCHEDULED → QUEUED (loop)
@@ -164,7 +180,7 @@ QUEUED → RUNNING ──→ SUCCESS
   │         └──→ DLQ (max retries exceeded)
   │
   └──→ CANCELLED
-``
+```
 
 | Status | Description |
 |---|---|
@@ -174,7 +190,7 @@ QUEUED → RUNNING ──→ SUCCESS
 | `SUCCESS` | Completed successfully |
 | `CANCELLED` | Cancelled by user |
 | `DLQ` | Dead-letter — exceeded max retries (terminal) |
-| `FAILED` | Legacy enum value, not actively assigned |
+| `FAILED` | Legacy enum value; not actively assigned by the engine |
 
 ---
 
@@ -188,7 +204,12 @@ Three priority levels with configurable weights:
 | `NORMAL` | 20 | Email notifications, standard processing |
 | `LOW` | 10 | Background maintenance, bulk operations |
 
-The scheduler uses **deficit weighted round-robin**. Each priority accumulates deficit proportional to its weight. The priority with the highest deficit that has queued jobs wins the next poll. Higher-priority queues drain faster while lower-priority queues still make progress — no starvation.
+The scheduler uses **deficit weighted round-robin**. Each priority accumulates deficit
+proportional to its weight. The priority with the highest deficit that has queued jobs wins the
+next poll, and it claims a batch (`scheduler.batch-size`, default 10) rather than a single job.
+Higher-priority queues drain faster while lower-priority queues still make progress — no
+starvation. Deficit is not reset when a queue drains, so an idle queue can transmit immediately
+when a burst arrives.
 
 ---
 
@@ -196,13 +217,16 @@ The scheduler uses **deficit weighted round-robin**. Each priority accumulates d
 
 When a handler throws:
 
-1. The failure is recorded in the execution log (when `retention.store-execution-logs` is on) (when `retention.store-execution-logs` is on)
+1. The failure is recorded in the execution log **when** `retention.store-execution-logs` is on
+   (off by default).
 2. If `attempt + 1 < maxAttempts` (retries remain):
-   - Base delay = `initialDelaySeconds × (backoffMultiplier ^ attemptCount)`, capped at `maxDelaySeconds` (default 300s), then jittered by ±`jitterFactor` (default 0.2) so jobs that failed together don't retry in lockstep
-   - Status set to `RETRY_SCHEDULED` with computed `nextRunAt`
-   - The retry promoter moves due retries back to `QUEUED`
+   - Base delay = `initialDelaySeconds × (backoffMultiplier ^ attemptCount)`, capped at
+     `maxDelaySeconds` (default 300s), then jittered by ±`jitterFactor` (default 0.2) so jobs that
+     failed together don't retry in lockstep.
+   - Status set to `RETRY_SCHEDULED` with the computed `nextRunAt`.
+   - The retry promoter moves due retries back to `QUEUED`.
 3. If `attempt + 1 >= maxAttempts`:
-   - Job moves to `DLQ` with the error message
+   - The job moves to `DLQ` with the error message.
 
 **Example with `maxAttempts=3`, `delay=5s`, `multiplier=2.0` (ignoring jitter):**
 
@@ -212,40 +236,54 @@ When a handler throws:
 | 1st retry | 1 | 10s | RETRY_SCHEDULED |
 | 2nd retry | 2 | — | DLQ |
 
-`maxAttempts=3` means 1 initial try + 2 retries, then DLQ. Retries are factored into the delay, so a failure on the 5th attempt (if `maxAttempts` were higher) would base onto `5 × 2^5 = 160s`, capped at `max-delay-seconds`.
+`maxAttempts=3` means 1 initial try + 2 retries, then DLQ. A failure on a later attempt (if
+`maxAttempts` were higher) bases onto `initialDelay × multiplier^attempt`, capped at
+`max-delay-seconds`.
 
 ---
 
 ## 7. Rate Limiting
 
-Per-producer sliding window rate limiter (default: 60 requests per 60 seconds). Uses **Redis sorted sets** for accuracy across distributed instances, with an **in-memory fallback** and **circuit breaker** if Redis is unavailable.
+Per-producer sliding-window rate limiter (default: 60 requests per 60 seconds). Uses **Redis
+sorted sets** (executed atomically via a Lua script) for accuracy across distributed instances,
+with an **in-memory fallback** and **circuit breaker** if Redis is unavailable.
 
-``yaml
+```yaml
 simplydone4j:
   rate-limit:
     requests-per-minute: 120
     window-seconds: 30
-``
+```
 
 When exceeded, `RateLimitExceededException` is thrown with a `retryAfterSeconds` hint.
 
-**Circuit breaker:** The breaker guards the Redis rate-limit backend, not the handler. After `circuit-breaker-failures` consecutive infrastructure failures (default 5) — a Redis exception or a malformed script response — the circuit opens and submissions fall back to the in-memory limiter instead of failing fast. After `rate-limit.circuit-breaker-reset-seconds` (default 30s) the circuit transitions to half-open and allows a single probe through; a success closes it, a failure re-opens it. Handler duration does not affect the circuit: a slow job is a throughput concern handled by leases and timeouts, not by refusing submission.
+**Circuit breaker:** The breaker guards the Redis rate-limit backend, not the handler. After
+`circuit-breaker-failures` consecutive infrastructure failures (default 5) — a Redis exception or
+a malformed script response — the circuit opens and submissions fall back to the in-memory
+limiter instead of failing fast. After `rate-limit.circuit-breaker-reset-seconds` (default 30s)
+the circuit transitions to half-open and allows a single probe through; a success closes it, a
+failure re-opens it. Handler duration does not affect the circuit: a slow job is a throughput
+concern handled by leases and timeouts, not by refusing submission.
+(`rate-limit.slow-call-duration-ms` is accepted for API compatibility but not enforced.)
 
 ---
 
 ## 8. Scheduling and Maintenance
 
-Scheduling (`SchedulerEngine`) and maintenance services (`WorkerMaintenanceServiceImpl`) are enabled by default when Redis is configured. They provide:
+Scheduling (`SchedulerEngine`) and maintenance (`WorkerMaintenanceServiceImpl`) are enabled by
+default when Redis is configured. They provide:
 
 - **Polling** — polls priority queues and claims ready jobs using deficit round-robin
-- **Retry promotion** — moves due `RETRY_SCHEDULED` jobs back to `QUEUED`
-- **Lease recovery** — detects expired leases on `RUNNING` jobs, triggers retry with token fencing
+  (first poll 2s after start, then every `scheduler.polling-interval-ms`).
+- **Retry promotion** — moves due `RETRY_SCHEDULED` jobs back to `QUEUED`.
+- **Lease recovery** — detects expired leases on `RUNNING` jobs and re-runs them with token
+  fencing, so two instances cannot both recover the same lease.
 
 **To run a submission-only node (no scheduling):**
 
-``bash
+```bash
 java -jar my-app.jar --simplydone4j.scheduler.enabled=false
-``
+```
 
 ---
 
@@ -253,7 +291,7 @@ java -jar my-app.jar --simplydone4j.scheduler.enabled=false
 
 SimplyDone4J publishes Spring `ApplicationEvent`s for every lifecycle transition:
 
-``java
+```java
 @Component
 public class JobEventListener {
 
@@ -269,9 +307,12 @@ public class JobEventListener {
         }
     }
 }
-``
+```
 
-`JobEventData` fields: `jobId`, `jobType`, `producer`, `status`, `priority`, `result`, `attempt`, `maxAttempts`, `durationMs`, `timestamp`, plus a free-form `additionalData` map for event-specific context.
+`JobEventData` fields: `jobId`, `jobType`, `producer`, `status`, `priority`, `result`, `attempt`,
+`maxAttempts`, `durationMs`, `timestamp`, plus a free-form `additionalData` map for
+event-specific context. A listener that throws is logged and isolated — it cannot change the
+job's recorded outcome.
 
 ---
 
@@ -281,7 +322,7 @@ Jobs support cooperative cancellation and progress reporting via `JobContext`.
 
 ### Cancellation
 
-``java
+```java
 registry.register("long-task", ctx -> {
     for (int i = 0; i < 100; i++) {
         if (ctx.isCancellationRequested()) {
@@ -291,19 +332,21 @@ registry.register("long-task", ctx -> {
     }
     return "done";
 });
-``
+```
 
 To cancel a job (only `QUEUED` jobs can be cancelled directly):
 
-``java
+```java
 submissionService.cancelJob(jobId);
-``
+```
 
-For running jobs, cancellation is cooperative — the handler must poll `isCancellationRequested()`.
+Cancellation is an atomic compare-and-set: if a worker claimed the job in the meantime the cancel
+loses rather than marking a running job as cancelled. For **running** jobs, cancellation is
+cooperative — the handler must poll `isCancellationRequested()`.
 
 ### Progress Reporting
 
-``java
+```java
 registry.register("progress-task", ctx -> {
     for (int i = 0; i <= 100; i += 10) {
         ctx.setProgress(i / 100.0, "Processing step " + i);
@@ -311,37 +354,42 @@ registry.register("progress-task", ctx -> {
     }
     return "complete";
 });
-``
+```
 
-Progress reporting is **not currently wired up**: `ctx.setProgress(...)` is a no-op because the context's progress callback is never populated, so `ctx.getProgress()` always returns `0.0`. Treat both as reserved API. For a live view of the engine, read `MonitoringService.getStats()` (queue depths and per-status counts) or subscribe to `JobEventPublisher` events.
+Progress reporting is **not currently wired up**: `ctx.setProgress(...)` is a no-op because the
+context's progress callback is never populated, so `ctx.getProgress()` always returns `0.0`.
+Treat both as reserved API. For a live view of the engine, read `MonitoringService.getStats()`
+(queue depths and per-status counts) or subscribe to `JobEventPublisher` events.
+
+---
 
 ## 11. Execution Logs (opt-in)
 
-Every execution attempt is recorded in Redis with timing and outcome — but only when
+Every execution attempt can be recorded in Redis with timing and outcome — but only when
 `retention.store-execution-logs` is enabled, which it is **not** by default. The log is a
-diagnostic, not something the engine needs in order to run a job, so it is opt-in to keep
-Redis holding only what it must. Enable it while investigating a retry loop, a timeout or
-a stuck job, then turn it back off.
+diagnostic, not something the engine needs in order to run a job, so it is opt-in to keep Redis
+holding only what it must. Enable it while investigating a retry loop, a timeout or a stuck job,
+then turn it back off.
 
-``yaml
+```yaml
 simplydone4j:
   retention:
     store-execution-logs: true   # default: false
     max-execution-logs-per-job: 50
-``
+```
 
-``java
+```java
 List<JobExecutionLog> logs = jobExecutionLogRepository.findByJobIdOrderByAttemptAsc(jobId);
 for (JobExecutionLog log : logs) {
     System.out.printf("Attempt %d: %s (%dms) — %s%n",
             log.getAttempt(), log.getStatus(), log.getDurationMs(), log.getMessage());
 }
-``
+```
 
 `JobExecutionLog` fields: `jobId`, `attempt`, `status`, `message`, `durationMs`, `executedAt`.
 
-Max entries per job: `retention.max-execution-logs-per-job` (default 50). The key TTL is
-the job TTL — `ttl-days×24 + ttl-hours`, so 1 hour by default — refreshed on each write.
+Max entries per job: `retention.max-execution-logs-per-job` (default 50). The key TTL is the job
+TTL — `ttl-days×24 + ttl-hours`, floored at 1 hour — refreshed on each write.
 
 ---
 
@@ -349,7 +397,7 @@ the job TTL — `ttl-days×24 + ttl-hours`, so 1 hour by default — refreshed o
 
 Inject `MonitoringService` for queue statistics and job counts:
 
-``java
+```java
 @Component
 public class MyMonitor {
 
@@ -370,22 +418,26 @@ public class MyMonitor {
         Map<String, Long> byQueue = monitoringService.getQueueDepths();
     }
 }
-``
+```
 
 **Fetch individual job details:**
 
-``java
+```java
 JobResponse job = submissionService.getJob(jobId);
-``
+```
 
 ---
 
 ## 13. Webhooks
 
-Set `callbackUrl` on submission to receive HTTP POST on completion:
+Set `callbackUrl` on submission to receive an HTTP POST on completion:
 
-``java
+```java
 req.setCallbackUrl("https://myapp.com/webhooks/job-complete");
-``
+```
 
-Payload: JSON with `jobId`, `status`, `jobType`, `result` and, on failure, an `error` string. Retries on transport errors and `408`/`429`/`5xx` with exponential backoff (max 3 attempts).
+Payload: JSON with `jobId`, `status`, `jobType`, `result` and, on failure, an `error` string.
+Delivery is best-effort: the terminal job state is persisted first, and a failed callback is
+logged and retried in the background. Transport errors and `408`/`429`/`5xx` are retried with
+exponential backoff up to `webhook.max-attempts` (default 3). Webhook delivery never changes the
+job's outcome.

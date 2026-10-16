@@ -8,6 +8,26 @@ import java.util.Optional;
 public interface QueueRepository {
     void enqueue(String jobId, JobPriority priority, long scheduledAtEpochMs);
 
+    /**
+     * Atomically enqueues {@code jobId} only while the target queue holds fewer than
+     * {@code maxDepth} entries.
+     *
+     * <p>The previous admission check read the queue depth and then enqueued in a
+     * separate round trip, so two submissions that both observed depth {@code maxDepth - 1}
+     * could both be admitted and overshoot the cap. Here the depth test and the
+     * {@code ZADD} happen inside one Redis script, which the server executes without
+     * interleaving; a concurrent submit therefore sees the entry this one wrote.
+     *
+     * <p>The capacity is enforced on the <em>target</em> queue rather than the sum across
+     * all priority queues. A sum would require a script keyed on every queue, and Redis
+     * Cluster rejects a script whose keys do not share a hash slot, so a per-target-queue
+     * check is the atomic option that holds across standalone, Sentinel and Cluster.
+     *
+     * @return {@code true} if the job was enqueued; {@code false} if the target queue was
+     *         already at capacity and nothing was written.
+     */
+    boolean enqueueIfUnderCapacity(String jobId, JobPriority priority, long scheduledAtEpochMs, long maxDepth);
+
     Optional<String> claimNextReady(JobPriority priority);
 
     /**

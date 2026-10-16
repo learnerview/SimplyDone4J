@@ -59,7 +59,7 @@ Every property has a working default, so the starter runs with no configuration 
 
 | Property | Default | Description |
 |---|---|---|
-| `queue.max-depth` | `10000` | Depth at which submission is refused with `QueueFullException` |
+| `queue.max-depth` | `10000` | **Per priority queue** (not the total) admission cap. Enforced atomically against the *target* queue by a Lua script (`enqueueIfUnderCapacity`): when that one queue already holds `max-depth` entries, submission is refused with `QueueFullException`. `HIGH`, `NORMAL` and `LOW` are counted separately, so the worst-case retained total is `3 × max-depth`, and a full `HIGH` queue rejects only `HIGH` submissions while `NORMAL`/`LOW` keep accepting. For a *total* threshold (used by health), see `health.max-queue-depth` below |
 
 ### Executor (Thread Pool)
 
@@ -123,7 +123,7 @@ Every property has a working default, so the starter runs with no configuration 
 
 | Property | Default | Description |
 |---|---|---|
-| `redis.enabled` | `true` | Whether the starter applies its Sentinel/cluster factory wiring |
+| `redis.enabled` | `true` | Declared for API compatibility but **not currently enforced**. The Sentinel/cluster connection factory is gated on `simplydone4j.redis.sentinel-nodes` being set, not on this flag |
 | `redis.sentinel-master` | — | Redis Sentinel master name (requires `redis.sentinel-nodes`) |
 | `redis.sentinel-nodes` | — | Sentinel or Cluster nodes as `host:port` list |
 | `redis.cluster-mode` | `false` | Treat `redis.sentinel-nodes` as a Redis Cluster instead of Sentinel |

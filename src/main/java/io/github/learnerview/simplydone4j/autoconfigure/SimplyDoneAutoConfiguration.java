@@ -323,6 +323,6 @@ public final class SimplyDoneAutoConfiguration {
                                                               RetryService retryService,
                                                               JobMetrics metrics,
                                                               SimplyDoneProperties props) {
-        return new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService, props, metrics);
+        return new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService, metrics);
     }
 }

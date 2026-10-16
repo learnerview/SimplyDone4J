@@ -34,7 +34,7 @@ class WorkerMaintenanceServiceImplTest {
     @BeforeEach
     void setUp() {
         props = new SimplyDoneProperties();
-        service = new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService, props);
+        service = new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService);
     }
 
     @Nested
