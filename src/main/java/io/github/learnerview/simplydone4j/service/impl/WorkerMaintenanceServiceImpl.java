@@ -22,20 +22,17 @@ public final class WorkerMaintenanceServiceImpl implements WorkerMaintenanceServ
     private final QueueRepository queueRepo;
     private final RetryService retryService;
     private final JobMetrics metrics;
-    private final SimplyDoneProperties config;
-
     public WorkerMaintenanceServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
-                                        RetryService retryService, SimplyDoneProperties config) {
-        this(jobRepo, queueRepo, retryService, config, JobMetrics.NOOP);
+                                        RetryService retryService) {
+        this(jobRepo, queueRepo, retryService, JobMetrics.NOOP);
     }
 
     public WorkerMaintenanceServiceImpl(JobRepository jobRepo, QueueRepository queueRepo,
-                                        RetryService retryService, SimplyDoneProperties config,
+                                        RetryService retryService,
                                         JobMetrics metrics) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;
         this.retryService = retryService;
-        this.config = config;
         this.metrics = metrics == null ? JobMetrics.NOOP : metrics;
     }
 

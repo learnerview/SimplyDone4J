@@ -6,6 +6,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.entity.JobEntity;
 import io.github.learnerview.simplydone4j.entity.JobExecutionLog;
+import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
@@ -233,6 +234,56 @@ assertNull(redis.opsForHash().get("simplydone4j:job:" + jobId, "payload"),
         assertTrue(redis.getExpire("simplydone4j:idx:status:dlq") > 0,
                 "the index key must carry the same positive retention TTL as the job it "
                         + "points at, so members disappear exactly when their jobs do");
+    }
+
+    @Test
+    @DisplayName("transitionStatusIfCurrent must move the job atomically when the status matches")
+    void shouldTransitionStatusWhenCurrent() {
+        JobEntity job = new JobEntity();
+        job.setId(jobId);
+        job.setStatus(JobStatus.QUEUED);
+        job.setPriority(JobPriority.NORMAL);
+        repository.save(job);
+
+        assertTrue(repository.transitionStatusIfCurrent(jobId, JobStatus.QUEUED, JobStatus.CANCELLED));
+
+        assertEquals(JobStatus.CANCELLED, repository.findById(jobId).orElseThrow().getStatus());
+        assertEquals(0L, repository.countByStatus(JobStatus.QUEUED),
+                "the job must leave the queued index when it is transitioned");
+        assertEquals(1L, repository.countByStatus(JobStatus.CANCELLED),
+                "the job must appear in the new status index");
+    }
+
+    @Test
+    @DisplayName("transitionStatusIfCurrent must lose the race when the status has already moved on")
+    void shouldNotTransitionWhenStatusMovedOn() {
+        JobEntity job = new JobEntity();
+        job.setId(jobId);
+        job.setStatus(JobStatus.RUNNING);
+        job.setPriority(JobPriority.NORMAL);
+        repository.save(job);
+
+        assertFalse(repository.transitionStatusIfCurrent(jobId, JobStatus.QUEUED, JobStatus.CANCELLED),
+                "a status that is not the expected one must not be overwritten");
+        assertEquals(JobStatus.RUNNING, repository.findById(jobId).orElseThrow().getStatus(),
+                "the worker's RUNNING transition must survive a losing cancel");
+    }
+
+    @Test
+    @DisplayName("delete must remove the job hash and every index entry")
+    void shouldDeleteJobAndIndexEntries() {
+        JobEntity job = new JobEntity();
+        job.setId(jobId);
+        job.setStatus(JobStatus.QUEUED);
+        job.setPriority(JobPriority.NORMAL);
+        repository.save(job);
+        assertEquals(1L, repository.countByStatus(JobStatus.QUEUED), "precondition");
+
+        repository.delete(jobId);
+
+        assertTrue(repository.findById(jobId).isEmpty(), "the job hash must be gone");
+        assertEquals(0L, repository.countByStatus(JobStatus.QUEUED),
+                "a deleted job must not linger in the status index");
     }
 
     @Test

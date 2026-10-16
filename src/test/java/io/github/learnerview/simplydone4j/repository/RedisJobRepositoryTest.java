@@ -15,6 +15,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Instant;
@@ -112,5 +114,56 @@ class RedisJobRepositoryTest {
         assertEquals(0, repo.countByStatus(JobStatus.RUNNING));
         assertEquals(0, repo.countByStatusAndPriority(JobStatus.RUNNING, JobPriority.NORMAL));
         verify(redis).expire(startsWith("sd4j-test:job:leak-1"), any(java.time.Duration.class));
+    }
+
+    @Test
+    void shouldDeleteJobHashAndPurgeEveryIndex() {
+        repo.delete("job-9");
+
+        verify(redis).delete("sd4j-test:job:job-9");
+        verify(zSetOps).remove("sd4j-test:idx:status:queued", "job-9");
+        verify(zSetOps).remove("sd4j-test:idx:status:running", "job-9");
+        verify(zSetOps).remove("sd4j-test:idx:status:priority:cancelled:normal", "job-9");
+    }
+
+    /** A Redis hash holds only strings; mirror that so deserialisation is realistic. */
+    private Map<Object, Object> storedJob(String status) {
+        Map<Object, Object> entries = new HashMap<>();
+        entries.put("id", "job-1");
+        entries.put("jobType", "test");
+        entries.put("producer", "app");
+        entries.put("status", status);
+        entries.put("priority", "NORMAL");
+        return entries;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldTransitionStatusWhenTheStoredStatusMatches() {
+        RedisOperations<String, String> ops = mock(RedisOperations.class);
+        when(ops.opsForHash()).thenReturn(hashOps);
+        lenient().when(ops.opsForZSet()).thenReturn(zSetOps);
+        when(hashOps.entries("sd4j-test:job:job-1")).thenReturn(storedJob("QUEUED"));
+        when(ops.exec()).thenReturn(List.of(true));
+        when(redis.execute(any(SessionCallback.class))).thenAnswer(
+                inv -> ((SessionCallback<?>) inv.getArgument(0)).execute(ops));
+
+        assertEquals(true, repo.transitionStatusIfCurrent("job-1", JobStatus.QUEUED, JobStatus.CANCELLED));
+        verify(ops).watch("sd4j-test:job:job-1");
+        verify(ops).multi();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldNotTransitionStatusWhenTheStoredStatusHasMovedOn() {
+        RedisOperations<String, String> ops = mock(RedisOperations.class);
+        when(ops.opsForHash()).thenReturn(hashOps);
+        when(hashOps.entries("sd4j-test:job:job-1")).thenReturn(storedJob("RUNNING"));
+        when(redis.execute(any(SessionCallback.class))).thenAnswer(
+                inv -> ((SessionCallback<?>) inv.getArgument(0)).execute(ops));
+
+        assertEquals(false, repo.transitionStatusIfCurrent("job-1", JobStatus.QUEUED, JobStatus.CANCELLED));
+        verify(ops).unwatch();
+        verify(ops, never()).multi();
     }
 }

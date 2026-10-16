@@ -161,6 +161,8 @@ class SimplyDoneAutoConfigurationTest {
                         @Override public void save(io.github.learnerview.simplydone4j.entity.JobEntity job) {}
                         @Override public java.util.Optional<io.github.learnerview.simplydone4j.entity.JobEntity> findById(String jobId) { return java.util.Optional.empty(); }
                         @Override public java.util.Optional<io.github.learnerview.simplydone4j.entity.JobEntity> findByProducerAndIdempotencyKey(String producer, String idempotencyKey) { return java.util.Optional.empty(); }
+                        @Override public void delete(String jobId) {}
+                        @Override public boolean transitionStatusIfCurrent(String jobId, io.github.learnerview.simplydone4j.model.JobStatus expected, io.github.learnerview.simplydone4j.model.JobStatus target) { return false; }
                         @Override public java.util.List<io.github.learnerview.simplydone4j.entity.JobEntity> findReadyToRun(io.github.learnerview.simplydone4j.model.JobStatus status, java.time.Instant before, int limit) { return java.util.List.of(); }
                         @Override public long countByStatus(io.github.learnerview.simplydone4j.model.JobStatus status) { return 0; }
                         @Override public long countByStatusAndPriority(io.github.learnerview.simplydone4j.model.JobStatus status, io.github.learnerview.simplydone4j.model.JobPriority priority) { return 0; }

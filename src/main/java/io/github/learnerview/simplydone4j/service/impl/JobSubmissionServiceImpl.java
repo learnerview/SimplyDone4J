@@ -29,7 +29,6 @@ import java.util.UUID;
 
 public final class JobSubmissionServiceImpl implements JobSubmissionService {
     private static final Logger log = LoggerFactory.getLogger(JobSubmissionServiceImpl.class);
-    private static final JobPriority[] PRIORITIES = JobPriority.values();
 
     private final JobRepository jobRepo;
     private final QueueRepository queueRepo;
@@ -75,11 +74,18 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
             throw new IllegalArgumentException("producer must not be null or blank");
         }
 
-        rateLimiter.checkRateLimit(producer);
-
-        if (totalQueueDepth() >= config.getQueue().getMaxDepth()) {
-            throw new QueueFullException(config.getQueue().getMaxDepth());
+        // Read-only dedup before any limit is charged. A retry of an already-accepted job
+        // must return the stored result even if the queue has since filled or the producer
+        // is now rate limited; charging a limit first rejects a duplicate that was in fact
+        // accepted. The authoritative acquireOrGetExisting below still closes the
+        // check-then-act race between this lookup and a competing submit.
+        Optional<JobEntity> alreadyAccepted =
+                jobRepo.findByProducerAndIdempotencyKey(producer, req.getIdempotencyKey());
+        if (alreadyAccepted.isPresent()) {
+            return dedupResponse(alreadyAccepted.get());
         }
+
+        rateLimiter.checkRateLimit(producer);
 
         String jobId = UUID.randomUUID().toString();
         Optional<String> existingJobIdOpt = idempotencyService.acquireOrGetExisting(producer, req.getIdempotencyKey(), jobId);
@@ -134,7 +140,25 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
                 .build();
 
         jobRepo.save(job);
-        queueRepo.enqueue(jobId, priority, nextRunAt.toEpochMilli());
+
+        boolean enqueued;
+        try {
+            // Atomic capacity-checked admission: the depth test and the ZADD happen in one
+            // Redis round trip, so concurrent submits cannot both observe a free slot.
+            enqueued = queueRepo.enqueueIfUnderCapacity(jobId, priority, nextRunAt.toEpochMilli(),
+                    config.getQueue().getMaxDepth());
+        } catch (RuntimeException e) {
+            // The job is already persisted and the idempotency key is held. Leaving them
+            // behind strands a QUEUED record no queue will ever hand to a worker and burns
+            // the key so the producer can never resubmit. Undo both, then surface the
+            // infrastructure failure.
+            compensateFailedEnqueue(producer, req.getIdempotencyKey(), jobId);
+            throw e;
+        }
+        if (!enqueued) {
+            compensateFailedEnqueue(producer, req.getIdempotencyKey(), jobId);
+            throw new QueueFullException(config.getQueue().getMaxDepth());
+        }
 
         log.info("Job submitted: {} type={} priority={}", jobId, req.getJobType(), priority);
         metrics.recordSubmitted(priority);
@@ -158,19 +182,50 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
     @Override
     public void cancelJob(String jobId) {
         JobEntity job = jobRepo.findById(jobId).orElseThrow(() -> new JobNotFoundException(jobId));
-        if (job.getStatus() == JobStatus.QUEUED) {
-            queueRepo.remove(jobId, job.getPriority());
-            job.setStatus(JobStatus.CANCELLED);
-            job.setVisibleAt(null);
-            job.setLeaseOwner(null);
-            job.setLeaseToken(null);
-            job.setResult("Cancelled by user");
-            job.setCompletedAt(Instant.now());
-            job.setUpdatedAt(Instant.now());
-            jobRepo.save(job);
-            eventPublisher.publish(JobEvent.JOB_CANCELLED, JobEventData.from(job));
-        } else {
+        if (job.getStatus() != JobStatus.QUEUED) {
             throw new IllegalArgumentException("Can only cancel QUEUED jobs, current: " + job.getStatus());
+        }
+
+        // Compare-and-set against the stored status rather than the status we just read.
+        // A worker that claimed the job between our read and this call has moved it to
+        // RUNNING; the CAS then loses and we must not overwrite a running job as cancelled.
+        if (!jobRepo.transitionStatusIfCurrent(jobId, JobStatus.QUEUED, JobStatus.CANCELLED)) {
+            JobEntity current = jobRepo.findById(jobId).orElse(null);
+            throw new IllegalArgumentException("Can only cancel QUEUED jobs, current: "
+                    + (current != null ? current.getStatus() : "MISSING"));
+        }
+
+        queueRepo.remove(jobId, job.getPriority());
+        job.setStatus(JobStatus.CANCELLED);
+        job.setVisibleAt(null);
+        job.setLeaseOwner(null);
+        job.setLeaseToken(null);
+        job.setResult("Cancelled by user");
+        job.setCompletedAt(Instant.now());
+        job.setUpdatedAt(Instant.now());
+        jobRepo.save(job);
+        eventPublisher.publish(JobEvent.JOB_CANCELLED, JobEventData.from(job));
+    }
+
+    /**
+     * Best-effort undo of a saved job whose enqueue did not succeed.
+     *
+     * <p>Both rollback steps are individually guarded: a failure to delete must not hide
+     * the enqueue failure the caller needs to see, and the idempotency release is a no-op
+     * unless this submission still owns the key.
+     */
+    private void compensateFailedEnqueue(String producer, String idempotencyKey, String jobId) {
+        try {
+            jobRepo.delete(jobId);
+        } catch (RuntimeException e) {
+            log.error("Could not delete job {} after a failed enqueue; it is stranded as QUEUED "
+                    + "with no queue entry and must be cleaned up manually", jobId, e);
+        }
+        try {
+            idempotencyService.releaseIfOwnedBy(producer, idempotencyKey, jobId);
+        } catch (RuntimeException e) {
+            log.error("Could not release idempotency key {} for producer {} after a failed enqueue",
+                    idempotencyKey, producer, e);
         }
     }
 
@@ -182,13 +237,5 @@ public final class JobSubmissionServiceImpl implements JobSubmissionService {
                 .priority(existing.getPriority().name())
                 .scheduledAt(existing.getNextRunAt())
                 .build();
-    }
-
-    private long totalQueueDepth() {
-        long total = 0L;
-        for (JobPriority p : PRIORITIES) {
-            total += queueRepo.queueSize(p);
-        }
-        return total;
     }
 }
