@@ -64,6 +64,17 @@ The engine logs at `INFO` for lifecycle transitions and `WARN` for recoverable p
 (rejected dispatch, fenced write). Sustained `WARN` lines are the early
 signal; the metrics are the aggregate.
 
+Operational failures that the engine cannot recover from (scheduler poll failure, dispatch
+or restore failure, terminal write failure) are logged at `ERROR`. Recoverable conditions
+that warrant operator attention are logged at `WARN`. Where a cause exists, the throwable is
+passed to the logger so the full stack trace is emitted; the engine deliberately avoids
+logging bare `e.getMessage()` values into parameterized messages, because that renders the
+message text without the failure context.
+
+The starter ships no logging configuration of its own; levels and output are owned by the
+host application through standard Spring Boot logging. Set
+`logging.level.io.github.learnerview.simplydone4j=DEBUG` to get engine diagnostics.
+
 ## Alerts worth having
 
 - `deadLettered` above zero and rising — work is failing terminally.

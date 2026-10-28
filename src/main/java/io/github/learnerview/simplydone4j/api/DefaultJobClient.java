@@ -121,7 +121,7 @@ public final class DefaultJobClient implements JobClient {
             deadLetterService.requeue(jobId);
             return true;
         } catch (Exception e) {
-            log.warn("Could not retry job {}: {}", jobId, e.getMessage());
+            log.warn("Could not retry job {}: {}", jobId, e);
             return false;
         }
     }

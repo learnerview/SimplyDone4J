@@ -46,7 +46,7 @@ public final class RedisJobExecutionLogRepository implements JobExecutionLogRepo
             redis.opsForList().trim(key, 0, maxExecutionLogsPerJob - 1);
             redis.expire(key, java.time.Duration.ofHours(ttlHours));
         } catch (Exception e) {
-            log.warn("Failed to save execution log for job {}: {}", executionLog.getJobId(), e.getMessage());
+            log.warn("Failed to save execution log for job {}: {}", executionLog.getJobId(), e);
         }
     }
 
@@ -64,7 +64,7 @@ public final class RedisJobExecutionLogRepository implements JobExecutionLogRepo
             try {
                 logs.add(objectMapper.readValue(entry, JobExecutionLog.class));
             } catch (Exception e) {
-                log.warn("Failed to deserialize log entry: {}", e.getMessage());
+                log.warn("Failed to deserialize log entry", e);
             }
         }
         return logs;

@@ -49,13 +49,15 @@ public final class JobMapper {
                 .build();
     }
 
-    @SuppressWarnings("unchecked")
     public Map<String, Object> deserializePayload(String payload) {
         if (payload == null || payload.isBlank()) return Map.of();
         try {
-            return objectMapper.readValue(payload, new TypeReference<Map<String, Object>>() {});
+            return objectMapper.readValue(
+                payload,
+                new TypeReference<Map<String, Object>>() {}
+            );
         } catch (JacksonException e) {
-            log.warn("Failed to deserialize payload: {}", e.getMessage());
+            log.warn("Failed to deserialize payload", e);
             return Map.of();
         }
     }

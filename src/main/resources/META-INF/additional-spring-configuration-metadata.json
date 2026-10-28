@@ -49,11 +49,6 @@
       "name": "simplydone4j.fencing",
       "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Fencing",
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
-    },
-    {
-      "name": "simplydone4j.webhook",
-      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Webhook",
-      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     }
   ],
   "properties": [

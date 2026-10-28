@@ -9,8 +9,8 @@ import java.util.concurrent.ThreadLocalRandom;
  * Exponential backoff with positive-and-negative jitter.
  *
  * <p>Delays are computed in milliseconds so the same arithmetic serves job retries
- * (configured in seconds) and webhook delivery (configured in milliseconds). Both
- * spread their retries, but for the same reason: a fleet of jobs that failed together
+ * (configured in seconds) and retry delivery (configured in milliseconds). Retries
+ * spread their backoff, but for the same reason: a fleet of jobs that failed together
  * — a bad deploy, an expired credential, a downstream outage — must not replay in
  * lockstep against the dependency that is trying to recover.</p>
  */
@@ -29,7 +29,7 @@ public class ExponentialBackoffRetryPolicy implements RetryPolicy {
     }
 
     /**
-     * Package-private so the webhook delivery can reuse this policy with its own
+     * Package-private so the retry policy can be constructed with explicit values
      * millisecond configuration without adding a second public knob to the API.
      */
     ExponentialBackoffRetryPolicy(long initialDelayMillis, double backoffMultiplier,

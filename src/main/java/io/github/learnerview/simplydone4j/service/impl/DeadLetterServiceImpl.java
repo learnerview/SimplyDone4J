@@ -137,7 +137,7 @@ public final class DeadLetterServiceImpl implements DeadLetterService {
             } catch (RuntimeException e) {
                 // One unrecoverable job must not abort the sweep; the rest still get
                 // their chance and the operator sees exactly what moved.
-                log.warn("Could not requeue dead-lettered job {}: {}", candidate.getId(), e.getMessage());
+                log.warn("Could not requeue dead-lettered job {}: {}", candidate.getId(), e);
             }
         }
         return requeued;

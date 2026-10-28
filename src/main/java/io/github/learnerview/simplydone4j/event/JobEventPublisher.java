@@ -23,8 +23,8 @@ public final class JobEventPublisher {
      * back into the caller. Every {@code publish} site here sits <em>after</em> the state
      * transition it reports, which turned any broken listener into a correctness problem:
      * a {@code JOB_CREATED} listener could make {@code submit} throw to the caller after the
-     * job was already persisted and enqueued; a {@code JOB_COMPLETED} listener silently
-     * skipped the success webhook; a {@code JOB_STARTED} listener threw on the
+     * job was already persisted and enqueued; a {@code JOB_COMPLETED} listener failure was
+     * logged and dropped; a {@code JOB_STARTED} listener threw on the
      * {@code @Scheduled} thread and aborted the poll loop.
      *
      * <p>An observer must not be able to change the thing it observes, so the failure is

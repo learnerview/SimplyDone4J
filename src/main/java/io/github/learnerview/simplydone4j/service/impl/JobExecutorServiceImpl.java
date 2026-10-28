@@ -218,7 +218,7 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
      * <p>Building the context is inside this method's guard because it can itself throw on
      * a malformed job. An exception escaping here would unwind into the worker pool, which
      * swallows it, and the job would sit in RUNNING until the reaper picked it up: no
-     * outcome, no webhook, no log trace.</p>
+     * outcome, no log trace.</p>
      */
     private void runHandler(JobEntity job, JobHandler handler, int timeoutSeconds, long start) {
         JobContext context;

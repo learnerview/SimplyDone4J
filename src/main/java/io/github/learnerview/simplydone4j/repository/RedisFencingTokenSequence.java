@@ -111,7 +111,7 @@ public final class RedisFencingTokenSequence implements FencingTokenSequence {
         } catch (Exception e) {
             // The token was already issued by INCR on the master; a failed acknowledgement
             // wait only weakens the failover guarantee.
-            log.debug("WAIT replication acknowledgement timed out or failed: {}", e.getMessage());
+            log.debug("WAIT replication acknowledgement timed out or failed", e);
         }
     }
 }
