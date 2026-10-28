@@ -2,23 +2,70 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
+# Minimal permissions — principle of least privilege.
+permissions:
+  contents: read
+
 jobs:
-  build:
+  build-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        java: [ 21 ]
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      IT_REDIS_HOST: localhost
+      IT_REDIS_PORT: 6379
+      # Suppress Spring Boot banner in test output
+      SPRING_MAIN_BANNER_MODE: "off"
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Java
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Temurin)
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ matrix.java }}
           distribution: temurin
+          java-version: '21'
           cache: maven
-      - name: Build and test
+
+      - name: Build, test & verify
+        # verify runs: compile → test → JaCoCo gate → SpotBugs → CycloneDX SBOM
         run: mvn -B clean verify
+
+      - name: Upload JaCoCo coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          if-no-files-found: ignore
+
+      - name: Upload Surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+
+      - name: Upload SBOM
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: target/bom.*
+          if-no-files-found: ignore

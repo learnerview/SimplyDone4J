@@ -1,5 +1,6 @@
 package io.github.learnerview.simplydone4j.handler;
 
+import io.github.learnerview.simplydone4j.exception.UnknownJobTypeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,7 +23,7 @@ public final class HandlerRegistry {
     public JobHandler getHandler(String jobType) {
         JobHandler handler = handlers.get(jobType);
         if (handler == null) {
-            throw new IllegalArgumentException("No handler registered for jobType: " + jobType);
+            throw new UnknownJobTypeException(jobType);
         }
         return handler;
     }

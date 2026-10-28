@@ -6,6 +6,7 @@ import io.github.learnerview.simplydone4j.entity.JobExecutionLog;
 import io.github.learnerview.simplydone4j.event.JobEvent;
 import io.github.learnerview.simplydone4j.event.JobEventData;
 import io.github.learnerview.simplydone4j.event.JobEventPublisher;
+import io.github.learnerview.simplydone4j.model.JobErrorCode;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobExecutionLogRepository;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
@@ -37,8 +38,52 @@ public final class RetryServiceImpl implements RetryService {
 
     @Override
     public String handleFailure(JobEntity job, String errorMessage, long durationMs) {
+        return applyFailure(job, null, null, errorMessage, durationMs);
+    }
+
+    @Override
+    public String handleFailureIfLeaseHeld(JobEntity job, String expectedLeaseToken,
+                                          String errorMessage, long durationMs) {
+        return applyFailure(job, expectedLeaseToken, null, errorMessage, durationMs);
+    }
+
+    @Override
+    public String handleFailureIfLeaseHeld(JobEntity job, String expectedLeaseToken,
+                                           JobErrorCode errorCode, String errorMessage, long durationMs) {
+        return applyFailure(job, expectedLeaseToken, errorCode, errorMessage, durationMs);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Unlike the retry path this does not touch the attempt counter: the job did not
+     * fail while running, it failed because it could never run. Keeping the counter intact
+     * means the execution log still shows the attempt the job was given, and a later
+     * re-drive starts from a clean budget.</p>
+     */
+    @Override
+    public String handleTerminalFailureIfLeaseHeld(JobEntity job, String expectedLeaseToken,
+                                                   JobErrorCode errorCode, String errorMessage, long durationMs) {
         int attempt = job.getAttemptCount();
-        int maxAttempts = job.getMaxAttempts() > 0 ? job.getMaxAttempts() : config.getRetry().getMaxAttempts();
+
+        job.setStatus(JobStatus.FAILED);
+        job.setVisibleAt(null);
+        job.setLeaseOwner(null);
+        job.setLeaseToken(null);
+        job.setNextRunAt(null);
+        job.setCompletedAt(Instant.now());
+        job.setResult(errorMessage != null ? errorMessage : "Job failed");
+        job.setErrorCode(errorCode != null ? errorCode.name() : null);
+        job.setUpdatedAt(Instant.now());
+
+        boolean persisted = expectedLeaseToken == null
+                ? saveUnfenced(job)
+                : jobRepo.saveIfLeaseHeld(job, expectedLeaseToken);
+
+        if (!persisted) {
+            log.warn("Job {} terminal failure discarded - the lease was lost before the write", job.getId());
+            return null;
+        }
 
         logRepo.save(JobExecutionLog.builder()
                 .jobId(job.getId())
@@ -49,51 +94,115 @@ public final class RetryServiceImpl implements RetryService {
                 .executedAt(Instant.now())
                 .build());
 
-        if (attempt + 1 < maxAttempts) {
-            long delayMs = retryPolicy.calculateDelayMs(attempt);
-            Instant nextRun = Instant.now().plusMillis(delayMs);
+        log.error("Job {} failed terminally: {}", job.getId(), errorMessage);
+        eventPublisher.publish(JobEvent.JOB_FAILED, JobEventData.builder()
+                .jobId(job.getId())
+                .jobType(job.getJobType())
+                .producer(job.getProducer())
+                .status("FAILED")
+                .errorCode(job.getErrorCode())
+                .result(errorMessage)
+                .attempt(attempt)
+                .timestamp(Instant.now())
+                .build());
+        return "FAILED";
+    }
+
+    /**
+     * @param expectedLeaseToken when non-null, the state transition is applied only if the
+     *                           persisted lease still matches, atomically.
+     */
+    private String applyFailure(JobEntity job, String expectedLeaseToken, JobErrorCode errorCode,
+                                String errorMessage, long durationMs) {
+        int attempt = job.getAttemptCount();
+        int maxAttempts = job.getMaxAttempts() > 0 ? job.getMaxAttempts() : config.getRetry().getMaxAttempts();
+        boolean willRetry = attempt + 1 < maxAttempts;
+        long delayMs = willRetry ? retryPolicy.calculateDelayMs(attempt) : 0L;
+
+        if (willRetry) {
             job.setStatus(JobStatus.RETRY_SCHEDULED);
-            job.setNextRunAt(nextRun);
+            job.setNextRunAt(Instant.now().plusMillis(delayMs));
             job.setVisibleAt(null);
             job.setLeaseOwner(null);
             job.setLeaseToken(null);
             job.setAttemptCount(attempt + 1);
+            // The progress of the attempt that just failed says nothing about the attempt
+            // that is about to start. Leaving it behind would show a retried job stuck at
+            // the percentage its previous attempt reached.
+            job.setProgress(null);
+            job.setProgressMessage(null);
             job.setUpdatedAt(Instant.now());
-            jobRepo.save(job);
+        } else {
+            job.setStatus(JobStatus.DLQ);
+            job.setVisibleAt(null);
+            job.setLeaseOwner(null);
+            job.setLeaseToken(null);
+            job.setNextRunAt(null);
+            job.setCompletedAt(Instant.now());
+            job.setResult("Max retries exceeded: " + errorMessage);
+            job.setUpdatedAt(Instant.now());
+        }
 
+        // The cause of the failure is recorded on the job itself, not only in the message.
+        // A job that is being retried still carries the code of the failure that sent it
+        // there, so the reason survives every attempt; a job that reaches the dead letter
+        // queue still carries the code of the failure that killed it.
+        if (errorCode != null) {
+            job.setErrorCode(errorCode.name());
+        }
+
+        boolean persisted = expectedLeaseToken == null
+                ? saveUnfenced(job)
+                : jobRepo.saveIfLeaseHeld(job, expectedLeaseToken);
+
+        if (!persisted) {
+            log.warn("Job {} failure discarded - the lease was lost before the write", job.getId());
+            return null;
+        }
+
+        // Recorded only after the state transition succeeded, so the log never claims an
+        // attempt that a competing worker had already superseded.
+        logRepo.save(JobExecutionLog.builder()
+                .jobId(job.getId())
+                .attempt(attempt)
+                .status("FAILED")
+                .message(errorMessage)
+                .durationMs(durationMs)
+                .executedAt(Instant.now())
+                .build());
+
+        if (willRetry) {
             log.info("Retrying job {} (attempt {}/{}) in {}ms", job.getId(), attempt + 1, maxAttempts, delayMs);
             eventPublisher.publish(JobEvent.JOB_RETRY, JobEventData.builder()
                     .jobId(job.getId())
                     .jobType(job.getJobType())
                     .producer(job.getProducer())
                     .status("RETRY_SCHEDULED")
+                    .errorCode(job.getErrorCode())
                     .attempt(attempt + 1)
                     .maxAttempts(maxAttempts)
                     .timestamp(Instant.now())
                     .build());
             return "RETRY_SCHEDULED";
-        } else {
-            job.setStatus(JobStatus.DLQ);
-            job.setVisibleAt(null);
-            job.setLeaseOwner(null);
-            job.setLeaseToken(null);
-            job.setCompletedAt(Instant.now());
-            job.setResult("Max retries exceeded: " + errorMessage);
-            job.setUpdatedAt(Instant.now());
-            jobRepo.save(job);
-
-            log.warn("Job {} moved to DLQ after {} attempts", job.getId(), maxAttempts);
-            eventPublisher.publish(JobEvent.JOB_FAILED, JobEventData.builder()
-                    .jobId(job.getId())
-                    .jobType(job.getJobType())
-                    .producer(job.getProducer())
-                    .status("DLQ")
-                    .result("Max retries exceeded: " + (errorMessage != null ? errorMessage : ""))
-                    .attempt(attempt)
-                    .timestamp(Instant.now())
-                    .build());
-            return "DLQ";
         }
+
+        log.warn("Job {} moved to DLQ after {} attempts", job.getId(), maxAttempts);
+        eventPublisher.publish(JobEvent.JOB_FAILED, JobEventData.builder()
+                .jobId(job.getId())
+                .jobType(job.getJobType())
+                .producer(job.getProducer())
+                .status("DLQ")
+                .errorCode(job.getErrorCode())
+                .result("Max retries exceeded: " + (errorMessage != null ? errorMessage : ""))
+                .attempt(attempt)
+                .timestamp(Instant.now())
+                .build());
+        return "DLQ";
+    }
+
+    private boolean saveUnfenced(JobEntity job) {
+        jobRepo.save(job);
+        return true;
     }
 
     @Override

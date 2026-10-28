@@ -39,20 +39,11 @@ class SimplyDoneRedisAutoConfigurationTest {
     }
 
     @Test
-    void shouldCreateClusterFactoryInClusterMode() {
+    void shouldNotBuildAFactoryForNodesWithoutAMaster() {
+        // Redis Cluster is not supported, so nodes without a Sentinel master are not a
+        // topology the starter can build: there is nothing to fall back to.
         SimplyDoneProperties props = new SimplyDoneProperties();
-        props.getRedis().setClusterMode(true);
         props.getRedis().setSentinelNodes(List.of("n1:6379", "n2:6379"));
-        LettuceConnectionFactory factory = SimplyDoneRedisAutoConfiguration.createIfConfigured(props);
-        assertNotNull(factory);
-    }
-
-    @Test
-    void shouldPreferSentinelOverClusterWhenBothConfigured() {
-        SimplyDoneProperties props = new SimplyDoneProperties();
-        props.getRedis().setClusterMode(true);
-        props.getRedis().setSentinelMaster("mymaster");
-        props.getRedis().setSentinelNodes(List.of("h1:26379"));
-        assertNotNull(SimplyDoneRedisAutoConfiguration.createIfConfigured(props));
+        assertNull(SimplyDoneRedisAutoConfiguration.createIfConfigured(props));
     }
 }

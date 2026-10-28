@@ -3,7 +3,6 @@ package io.github.learnerview.simplydone4j.service.impl;
 import io.github.learnerview.simplydone4j.dto.QueueStatsResponse;
 import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
-import io.github.learnerview.simplydone4j.repository.JobExecutionLogRepository;
 import io.github.learnerview.simplydone4j.repository.JobQueryRepository;
 import io.github.learnerview.simplydone4j.repository.QueueRepository;
 import io.github.learnerview.simplydone4j.service.MonitoringService;
@@ -20,20 +19,19 @@ public final class MonitoringServiceImpl implements MonitoringService {
 
     private final JobQueryRepository jobRepo;
     private final QueueRepository queueRepo;
-    private final JobExecutionLogRepository logRepo;
-
-    public MonitoringServiceImpl(JobQueryRepository jobRepo, QueueRepository queueRepo,
-                                 JobExecutionLogRepository logRepo) {
+    
+    public MonitoringServiceImpl(JobQueryRepository jobRepo, QueueRepository queueRepo) {
         this.jobRepo = jobRepo;
         this.queueRepo = queueRepo;
-        this.logRepo = logRepo;
     }
 
     @Override
     public QueueStatsResponse getStats() {
-        long highQ = queueRepo.queueSize(JobPriority.HIGH);
-        long normalQ = queueRepo.queueSize(JobPriority.NORMAL);
-        long lowQ = queueRepo.queueSize(JobPriority.LOW);
+        // One read of every queue's depth, not one per priority.
+        Map<JobPriority, Long> depths = queueRepo.queueDepths();
+        long highQ = depths.getOrDefault(JobPriority.HIGH, 0L);
+        long normalQ = depths.getOrDefault(JobPriority.NORMAL, 0L);
+        long lowQ = depths.getOrDefault(JobPriority.LOW, 0L);
         long totalQueued = highQ + normalQ + lowQ;
         long totalRunning = jobRepo.countByStatus(JobStatus.RUNNING);
         long totalSuccess = jobRepo.countByStatus(JobStatus.SUCCESS);
@@ -73,9 +71,7 @@ public final class MonitoringServiceImpl implements MonitoringService {
     @Override
     public Map<String, Long> getQueueDepths() {
         Map<String, Long> depths = new TreeMap<>();
-        for (JobPriority p : JobPriority.values()) {
-            depths.put(p.name(), queueRepo.queueSize(p));
-        }
+        queueRepo.queueDepths().forEach((priority, size) -> depths.put(priority.name(), size));
         return depths;
     }
 }

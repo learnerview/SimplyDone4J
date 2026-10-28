@@ -1,4 +1,3 @@
-
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -14,7 +13,7 @@
 
     <groupId>io.github.learnerview</groupId>
     <artifactId>simplydone4j-spring-boot-starter</artifactId>
-    <version>2.0.1</version>
+    <version>3.0.0</version>
     <packaging>jar</packaging>
 
     <name>SimplyDone4J</name>
@@ -42,12 +41,22 @@
         <connection>scm:git:git://github.com/learnerview/simplydone4j.git</connection>
         <developerConnection>scm:git:ssh://github.com/learnerview/simplydone4j.git</developerConnection>
         <url>https://github.com/learnerview/simplydone4j</url>
-        <tag>v2.0.1</tag>
+        <tag>v3.0.0</tag>
     </scm>
 
     <properties>
         <java.version>21</java.version>
         <maven.compiler.release>21</maven.compiler.release>
+        <lombok.version>1.18.48</lombok.version>
+        <!-- Reproducible builds: fixed timestamp so byte-identical JARs are produced -->
+        <!-- on any machine / CI run. Update when cutting a release.                   -->
+        <project.build.outputTimestamp>2026-10-22T00:00:00Z</project.build.outputTimestamp>
+        <!-- Dependency versions not managed by the Spring Boot BOM -->
+        <archunit.version>1.3.0</archunit.version>
+        <spotbugs.version>4.8.6</spotbugs.version>
+        <spotbugs-plugin.version>4.8.6.4</spotbugs-plugin.version>
+        <cyclonedx.version>2.9.1</cyclonedx.version>
+        <japicmp.version>0.23.1</japicmp.version>
     </properties>
 
     <dependencies>
@@ -67,14 +76,30 @@
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
         </dependency>
+        <!--
+          Jackson 3. The `jackson-databind` artifact brings `jackson-core` and the
+          Java 8 date/time support that Jackson 2 kept in a separate `jsr310` module,
+          so no second dependency is needed.
+        -->
         <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
+        </dependency>
+        <!--
+          Compile-time only. `provided` is deliberate over `optional`: the jar is
+          published to Maven Central, and consumers who copy this POM must not inherit
+          an annotation processor they never asked for. `provided` keeps Lombok on the
+          classpath at compile time while leaving zero trace downstream.
+        -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -92,15 +117,9 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers</artifactId>
-            <version>1.20.4</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>1.20.4</version>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -135,6 +154,91 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- JaCoCo: coverage report + gate.
+                 50% line coverage on the bundle; autoconfigure/dto/entity packages
+                 are Spring wiring / data holders and are excluded from the gate.
+                 Raise these thresholds as the test suite matures.              -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.12</version>
+                <executions>
+                    <execution><goals><goal>prepare-agent</goal></goals></execution>
+                    <execution><id>report</id><phase>test</phase><goals><goal>report</goal></goals></execution>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                        <configuration>
+                            <excludes>
+                                <exclude>io/github/learnerview/simplydone4j/autoconfigure/**</exclude>
+                                <exclude>io/github/learnerview/simplydone4j/dto/**</exclude>
+                                <exclude>io/github/learnerview/simplydone4j/entity/**</exclude>
+                            </excludes>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.50</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- SpotBugs static analysis -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>${spotbugs-plugin.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.github.spotbugs</groupId>
+                        <artifactId>spotbugs</artifactId>
+                        <version>${spotbugs.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Low</threshold>
+                    <failOnError>false</failOnError>
+                    <excludeFilterFile>${project.basedir}/.spotbugs-exclude.xml</excludeFilterFile>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>spotbugs-check</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- CycloneDX SBOM -->
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+                <version>${cyclonedx.version}</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>makeAggregateBom</goal></goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <projectType>library</projectType>
+                    <schemaVersion>1.6</schemaVersion>
+                    <includeBomSerialNumber>true</includeBomSerialNumber>
+                    <includeCompileScope>true</includeCompileScope>
+                    <includeProvidedScope>false</includeProvidedScope>
+                    <includeRuntimeScope>true</includeRuntimeScope>
+                    <includeTestScope>false</includeTestScope>
+                    <outputFormat>all</outputFormat>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 
@@ -156,22 +260,23 @@
                             </execution>
                         </executions>
                     </plugin>
-<plugin>
-                            <groupId>org.apache.maven.plugins</groupId>
-                            <artifactId>maven-javadoc-plugin</artifactId>
-                            <version>3.10.1</version>
-                            <configuration>
-                                <failOnError>false</failOnError>
-                            </configuration>
-                            <executions>
-                                <execution>
-                                    <id>attach-javadocs</id>
-                                    <goals>
-                                        <goal>jar</goal>
-                                    </goals>
-                                </execution>
-                            </executions>
-                        </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.10.1</version>
+                        <configuration>
+                            <failOnError>false</failOnError>
+                            <doclint>none</doclint>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>

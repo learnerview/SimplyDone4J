@@ -2,6 +2,7 @@ package io.github.learnerview.simplydone4j.service.impl;
 
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.entity.JobEntity;
+import io.github.learnerview.simplydone4j.model.JobErrorCode;
 import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
@@ -34,7 +35,7 @@ class WorkerMaintenanceServiceImplTest {
     @BeforeEach
     void setUp() {
         props = new SimplyDoneProperties();
-        service = new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService, props);
+        service = new WorkerMaintenanceServiceImpl(jobRepo, queueRepo, retryService);
     }
 
     @Nested
@@ -51,30 +52,25 @@ class WorkerMaintenanceServiceImplTest {
 
             when(jobRepo.findReadyToRun(eq(JobStatus.RETRY_SCHEDULED), any(Instant.class), eq(100)))
                     .thenReturn(List.of(dueJob));
+            when(jobRepo.transitionStatusIfCurrent(dueJob.getId(),
+                    JobStatus.RETRY_SCHEDULED, JobStatus.QUEUED)).thenReturn(true);
 
             service.promoteRetries();
 
-            verify(jobRepo).save(dueJob);
+            verify(jobRepo).transitionStatusIfCurrent(dueJob.getId(),
+                    JobStatus.RETRY_SCHEDULED, JobStatus.QUEUED);
             verify(queueRepo).enqueue(dueJob.getId(), dueJob.getPriority(),
                     dueJob.getNextRunAt().toEpochMilli());
         }
 
         @Test
-        void shouldNotPromoteFutureRetries() {
-            JobEntity futureJob = JobEntity.builder()
-                    .id("retry-future")
-                    .jobType("test")
-                    .status(JobStatus.RETRY_SCHEDULED)
-                    .priority(JobPriority.LOW)
-                    .nextRunAt(Instant.now().plusSeconds(60))
-                    .build();
-
+        void shouldPromoteNothingWhenNoRetriesAreDue() {
             when(jobRepo.findReadyToRun(eq(JobStatus.RETRY_SCHEDULED), any(Instant.class), eq(100)))
                     .thenReturn(List.of());
 
             service.promoteRetries();
 
-            verify(jobRepo, never()).save(any());
+            verify(jobRepo, never()).transitionStatusIfCurrent(anyString(), any(), any());
             verify(queueRepo, never()).enqueue(anyString(), any(), anyLong());
         }
 
@@ -84,7 +80,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.promoteRetries();
 
-            verify(jobRepo, never()).save(any());
+            verify(jobRepo, never()).transitionStatusIfCurrent(anyString(), any(), any());
         }
 
         @Test
@@ -118,7 +114,9 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService).handleFailure(expiredJob, "Worker lease expired", 0L);
+            // The reaper must present the token it observed as RUNNING, so the write
+            // is rejected if another worker already reclaimed the job.
+            verify(retryService).handleFailureIfLeaseHeld(expiredJob, "old-token", JobErrorCode.LEASE_LOST, "Worker lease expired", 0L);
         }
 
         @Test
@@ -127,7 +125,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, never()).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, never()).handleFailureIfLeaseHeld(any(), anyString(), any(JobErrorCode.class), anyString(), anyLong());
         }
 
         @Test
@@ -145,7 +143,13 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, times(3)).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, times(3)).handleFailureIfLeaseHeld(any(), anyString(), any(JobErrorCode.class), anyString(), anyLong());
+            verify(retryService).handleFailureIfLeaseHeld(argThat(j -> j.getId().equals("exp-1")), eq("token-1"),
+                    eq(JobErrorCode.LEASE_LOST), anyString(), anyLong());
+            verify(retryService).handleFailureIfLeaseHeld(argThat(j -> j.getId().equals("exp-2")), eq("token-2"),
+                    eq(JobErrorCode.LEASE_LOST), anyString(), anyLong());
+            verify(retryService).handleFailureIfLeaseHeld(argThat(j -> j.getId().equals("exp-3")), eq("token-3"),
+                    eq(JobErrorCode.LEASE_LOST), anyString(), anyLong());
         }
 
         @Test

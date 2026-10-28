@@ -1,8 +1,6 @@
 package io.github.learnerview.simplydone4j.mapper;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.github.learnerview.simplydone4j.dto.JobResponse;
 import io.github.learnerview.simplydone4j.entity.JobEntity;
 import io.github.learnerview.simplydone4j.model.JobPriority;
@@ -10,6 +8,9 @@ import io.github.learnerview.simplydone4j.model.JobStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.cfg.DateTimeFeature;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
 import java.util.Map;
@@ -23,10 +24,11 @@ class JobMapperTest {
 
     @BeforeEach
     void setUp() {
-        objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());
-        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        objectMapper.setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
+        objectMapper = JsonMapper.builder()
+                .disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .changeDefaultPropertyInclusion(inclusion ->
+                        inclusion.withValueInclusion(JsonInclude.Include.NON_NULL))
+                .build();
         mapper = new JobMapper(objectMapper);
     }
 
@@ -53,11 +55,12 @@ class JobMapperTest {
 
         @Test
         void shouldThrowForUnserializablePayload() {
-            Object badValue = new Object() {
-                public String toString() { return "bad"; }
-            };
+            Map<String, Object> badValue = Map.of("self", new java.util.concurrent.atomic.AtomicReference<Object>());
+            // Use a cycle that Jackson cannot serialize
+            Map<String, Object> root = new java.util.HashMap<>();
+            root.put("x", root);
             assertThrows(IllegalArgumentException.class,
-                    () -> mapper.serializePayload(Map.of("bad", badValue)));
+                    () -> mapper.serializePayload(root));
         }
     }
 

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs exclusion filter for SimplyDone4J.
+
+  We suppress false positives that are either:
+    - deliberate design decisions (e.g. volatile fields, synchronised access patterns)
+    - irrelevant to a library (e.g. UI, servlet, serialisation)
+    - suppressed in generated / Lombok code
+-->
+<FindBugsFilter>
+
+    <!-- Lombok-generated hashCode/equals on entities that do not define a
+         natural order: not an issue for internal Redis hash DTOs. -->
+    <Match>
+        <Class name="~io\.github\.learnerview\.simplydone4j\.entity\..*"/>
+        <Bug pattern="EQ_DOESNT_OVERRIDE_EQUALS"/>
+    </Match>
+
+    <!-- The ProgressReporter CAS loop uses AtomicLong.compareAndSet() correctly;
+         SpotBugs may flag the non-atomic read of lastWriteAt.get() that precedes it
+         as a TOCTOU, but the CAS is the actual guard. -->
+    <Match>
+        <Class name="io.github.learnerview.simplydone4j.service.impl.JobExecutorServiceImpl$ProgressReporter"/>
+        <Bug pattern="AT_OPERATION_SEQUENCE_ON_CONCURRENT_ABSTRACTION"/>
+    </Match>
+
+    <!-- Lua scripts are stored as static final String constants — not a security
+         concern in a library that only runs them against the application's own Redis. -->
+    <Match>
+        <Bug pattern="HRS_REQUEST_PARAMETER_TO_HTTP_HEADER"/>
+    </Match>
+
+    <!-- The CallbackUrlGuard intentionally does DNS resolution to validate URLs;
+         the host is warned in the docs that this is defence-in-depth only. -->
+    <Match>
+        <Class name="io.github.learnerview.simplydone4j.service.impl.CallbackUrlGuard"/>
+        <Bug pattern="URLCONNECTION_SSRF_FD"/>
+    </Match>
+
+    <!-- Spring ApplicationEvent extends EventObject (Serializable), but in-process
+         events in Spring Boot are never serialized via Java serialization. -->
+    <Match>
+        <Class name="io.github.learnerview.simplydone4j.event.JobEventPublisher$JobPublishedEvent"/>
+        <Bug pattern="SE_BAD_FIELD"/>
+    </Match>
+
+    <!-- Reactive Streams / Flow.Subscriber contract guarantees onSubscribe() is called
+         before onNext(); subscription is initialized in onSubscribe(), not in the constructor. -->
+    <Match>
+        <Class name="io.github.learnerview.simplydone4j.service.impl.BoundedDiscardingBodyHandler$DiscardingSubscriber"/>
+        <Bug pattern="UWF_FIELD_NOT_INITIALIZED_IN_CONSTRUCTOR"/>
+    </Match>
+
+    <!-- Spring dependency injection passes beans and services into constructors,
+         which SpotBugs flags as EI_EXPOSE_REP2. This is idiomatic Spring design. -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+    </Match>
+
+</FindBugsFilter>

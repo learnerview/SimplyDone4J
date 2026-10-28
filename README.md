@@ -4,185 +4,147 @@
 [![Release](https://github.com/learnerview/simplydone4j/actions/workflows/release.yml/badge.svg)](https://github.com/learnerview/simplydone4j/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Embeddable, Redis-backed background job scheduling engine for Spring Boot 4.x.
+**Reliable background jobs for Spring Boot, backed by the Redis you already run.**
 
-**SimplyDone4J is a lightweight Java dependency (not a service) that brings reliable job scheduling, priority queues, automatic retries, rate limiting, lease-based execution, and webhook callbacks to any Spring Boot application — with zero infrastructure beyond Redis.**
+SimplyDone4J is a Spring Boot starter, not a service. Add one dependency, register a
+handler, and submit jobs. There is no scheduler daemon, no worker process and no second
+database: Redis is the queue, the job store, the idempotency store and the lock service.
 
----
+- Group / artifact: `io.github.learnerview:simplydone4j-spring-boot-starter`
+- Version: `3.0.0`
+- Java 21, Spring Boot 4.1
 
-### Quick Start
+## Features
 
-**1. Add the dependency:**
+- **Priority queues** — `HIGH` / `NORMAL` / `LOW` with weighted deficit round-robin, so
+  low-priority work is not starved.
+- **Idempotent submission** — deduplicated by `producer + idempotencyKey`.
+- **At-least-once execution** — claims carry a lease and a fencing token; expired leases
+  are reaped and stale writes are rejected.
+- **Crash recovery** — a queue reconciler, lease reaper and retry promoter close the windows
+  a process crash can open.
+- **Exponential backoff with jitter** — bounded attempts, then a dead-letter state.
+- **Dead-letter recovery** — requeue with a fresh attempt budget.
+- **Cooperative cancellation and progress** — visible through `JobContext` and `JobView`.
+- **Uniqueness** — an optional cluster-wide lock for jobs that must not overlap.
+- **Admission control** — your `AdmissionPolicy` decides; `queue.max-depth` provides
+  backpressure.
+- **Observability** — optional Micrometer metrics and an Actuator health indicator.
+- **Graceful shutdown** — in-flight handlers drain before the executor stops.
+
+## Requirements
+
+- Java 21+
+- Spring Boot 4.1+
+- Redis 6 or 7, standalone or Sentinel
+
+Redis Cluster is not supported; see [Limitations](#limitations).
+
+## Quick start
+
+Add the starter:
 
 ```xml
 <dependency>
     <groupId>io.github.learnerview</groupId>
     <artifactId>simplydone4j-spring-boot-starter</artifactId>
-    <version>2.0.1</version>
+    <version>3.0.0</version>
 </dependency>
 ```
 
-**2. Start Redis:**
-
-```bash
-docker run -d --name redis -p 6379:6379 redis:7-alpine
-# Or with authentication:
-docker run -d --name redis -p 6379:6379 redis:7-alpine redis-server --requirepass mypassword
-```
-
-**3. Configure `application.yml`:**
-
-```yaml
-spring:
-  data:
-    redis:
-      url: redis://localhost:6379
-# Optional: Redis Sentinel/Cluster — see docs/CONFIGURATION.md
-```
-
-**4. Define a handler and submit your first job:**
-
-The `JobHandler` interface returns a `String` (job result or identifier):
+Register handlers in a `HandlerRegistry` bean and submit through `JobClient`:
 
 ```java
-@SpringBootApplication
-public class MyApplication {
-
-    public static void main(String[] args) {
-        SpringApplication.run(MyApplication.class, args);
-    }
+@Configuration
+class JobConfig {
 
     @Bean
-    public JobHandler emailHandler(JobContext context) {
-        return ctx -> "email-sent-" + ctx.getJobId();
+    HandlerRegistry handlerRegistry() {
+        HandlerRegistry registry = new HandlerRegistry();
+        registry.register("email", ctx -> "sent:" + ctx.getJobId());
+        return registry;
+    }
+}
+
+@Service
+class WelcomeService {
+
+    private final JobClient jobClient;
+
+    WelcomeService(JobClient jobClient) {
+        this.jobClient = jobClient;
     }
 
-    @Bean
-    public CommandLineRunner demo(HandlerRegistry registry,
-                                    JobSubmissionService submissionService) {
-        return args -> {
-            registry.register("email", emailHandler());
-
-            JobSubmissionRequest req = new JobSubmissionRequest();
-            req.setJobType("email");
-            req.setIdempotencyKey("order-123");
-
-            JobSubmissionResponse res = submissionService.submit("my-app", req);
-            System.out.println("Submitted: " + res.getJobId() + " status=" + res.getStatus());
-        };
+    JobHandle sendWelcome(String email) {
+        return jobClient.submit("email",
+                Map.of("to", email),
+                opts -> opts.producer("my-app").idempotencyKey("welcome:" + email));
     }
 }
 ```
 
-**5. Scheduling is enabled by default.** To disable it (submission-only node):
+A handler returns a result string on success and throws on failure. The return value is
+stored on the job and available through `jobClient.get(handle.id())`.
+
+Point Spring Data Redis at your instance with `spring.data.redis.*`. Every `simplydone4j.*`
+property has a sensible production default.
+
+## Documentation
+
+| Guide | Contents |
+| --- | --- |
+| [Architecture](docs/ARCHITECTURE.md) | Distributed systems invariants: monotonic fencing tokens, two-phase idempotency reservation, Lua atomic state transitions, and Deficit Round-Robin scheduling. |
+| [Operations](docs/OPERATIONS.md) | Production signals: Actuator health indicators, Micrometer metrics, Redis keyspace topology, and failure runbooks. |
+
+## How it works
+
+A job is written to Redis and added to its priority queue in one atomic step. A scheduler
+claims due jobs with a fencing token, transitions them to `RUNNING`, and hands them to a
+worker. The outcome is written only if the worker still holds the lease. Failures are
+retried with backoff, then parked in `DLQ`.
+
+Execution is **at-least-once**. A worker can die after the side effect and before the
+outcome is recorded, so handlers that call external systems must be idempotent. See
+[Architecture](docs/ARCHITECTURE.md) for details on fencing tokens and lease reclamation.
+
+## Limitations
+
+- **Redis is the only backend.** If Redis is unavailable, submission and execution stop;
+  use Sentinel for high availability.
+- **At-least-once, not exactly-once.** Duplicate execution is possible by design.
+- **Redis Cluster is unsupported.** The atomic write spans keys that do not share a hash
+  slot. Standalone and Sentinel are supported.
+- **Timed-out handlers are not interrupted.** The timeout is recorded, but the handler keeps
+  its worker until it returns.
+- **Cancellation and progress are cooperative.** A handler that never checks cannot be
+  stopped.
+- **Recovery is second-scale.** A crashed worker's job is recovered within the lease and
+  reaper intervals.
+- **`DLQ` is a status, not a separate store.** There is no automatic replay; requeue
+  explicitly.
+- **No job chaining, ordering or strict priority.** A handler can submit the next job
+  itself; priorities are weights.
+- **`key-prefix` is isolation, not security.** A tenant with Redis access can read every
+  key.
+
+## Verification & Testing
+
+The test suite validates atomic state transitions, lease fencing, two-phase idempotency reservation, retry backoff, and concurrency boundaries:
 
 ```bash
-java -jar my-app.jar --simplydone4j.scheduler.enabled=false
+# Run unit & architecture tests, static analysis (SpotBugs), and package verification
+./mvnw clean verify
+
+# Optional: run integration tests against a live Redis instance
+# docker run -d --name redis -p 6379:6379 redis:7-alpine
+./mvnw verify -Dit.redis.host=localhost -Dit.redis.port=6379
 ```
 
-That's it. Your jobs are queued in Redis, scheduled with weighted priority, retried on failure, and logged.
+## Security & Operational Notes
 
----
+- **Credentials:** Supply Redis passwords and connection URLs via Spring Boot properties (`spring.data.redis.*`) or environment variables, never hardcoded in source.
+- **Payload Privacy:** Payloads are serialized JSON stored in Redis hashes. If payloads contain sensitive financial or PII data, use `retention.clear-payload-on-completion: true` to purge payloads immediately upon reaching a terminal state.
 
-### Why SimplyDone4J?
+## License
 
-| Feature | SimplyDone4J | Quartz | JobRunr |
-|---|---|---|---|
-| Runtime | JVM embedded (no service) | JVM embedded | JVM embedded |
-| Backend | Redis only | SQL database | SQL / NoSQL |
-| Spring Boot | Native starter 4.x | Requires adapter | Requires adapter |
-| Priority queues | HIGH / NORMAL / LOW with weighted deficit scheduling | Limited | Supported |
-| Rate limiting | Built-in with Redis + in-memory fallback | Not built-in | Not built-in |
-| Setup | 1 dependency + Redis | DB schema + config | DB schema + config |
-| Footprint | ~15 KB jar | ~1.5 MB | ~500 KB |
-
-You don't need a database, a separate worker process, or external infrastructure — just Redis, which you likely already have for caching.
-
----
-
-### Features
-
-- **Priority queues** — HIGH, NORMAL, LOW with weighted deficit round-robin scheduling
-- **Idempotent submission** — deduplicates by `producer + idempotencyKey`
-- **Rate limiting** — per-producer sliding window (Redis-backed with in-memory fallback + circuit breaker)
-- **Exponential backoff retry** — configurable max attempts, initial delay, multiplier
-- **Lease-based execution** — jobs leased to workers; expired leases auto-recovered with token fencing
-- **Scheduled maintenance** — retry promoter and lease reaper run at configurable intervals
-- **Job events** — Spring `ApplicationEvent` published on every lifecycle transition
-- **Execution logs** — per-attempt history stored in Redis
-- **Dead-letter queue** — jobs exceeding max retries automatically moved to DLQ
-- **Graceful shutdown** — in-flight jobs complete before the application stops
-- **Health monitoring** — built-in metrics and status counts
-- **Callback URLs** — HTTP callbacks on job completion
-- **Fully auto-configured** — drop the dependency, configure Redis, go
-- **Redis Sentinel/Cluster support** — high availability configuration
-- **Micrometer/Prometheus metrics** — export job counts and status rates
-- **Actuator health indicators** — custom job system health checks
-
----
-
-### Documentation
-
-| Guide | Description |
-|---|---|
-| [Configuration Reference](docs/CONFIGURATION.md) | Complete property table, YAML examples, env vars, Redis HA, retention |
-| [User Guide](docs/GUIDE.md) | Handlers, submission, idempotency, lifecycle, retries, rate limiting, events, cancellation, progress, execution logs, monitoring |
-| [Production Deployment](docs/PRODUCTION.md) | Resource sizing, health checks, metrics, Docker/Compose, debugging |
-| [Architecture](docs/ARCHITECTURE.md) | Redis data model, algorithms (deficit WRR, backoff, Lua rate-limiter, circuit breaker, WATCH/MULTI claim, lease fencing), design decisions |
-| [Development](docs/DEVELOPMENT.md) | Local build/test, demo app, CI/CD, release process, project layout |
-
----
-
-### Minimal Configuration
-
-```yaml
-simplydone4j:
-  retry:
-    max-attempts: 3
-    initial-delay-seconds: 5
-    backoff-multiplier: 2.0
-  rate-limit:
-    requests-per-minute: 60
-    window-seconds: 60
-  scheduler:
-    weights:
-      high: 70
-      normal: 20
-      low: 10
-  ttl-days: 0
-  ttl-hours: 1
-```
-
-All properties → [Configuration Reference](docs/CONFIGURATION.md)
-
----
-
-### Known Limitations
-
-Honest admission of trade-offs — not blockers, but considerations:
-
-1. **Orphan jobs on crash** — If the application crashes between saving the job hash to Redis and adding the job ID to the priority queue, the job exists in the hash store but not in any queue. These orphan jobs are self-healing: the idempotency lock expires after `idempotency-ttl-hours` (default 1 hour), allowing the caller to resubmit.
-
-2. **Consumed idempotency ticket on crash** — If the application crashes after winning the idempotency `SETNX` lock but before saving the job, the idempotency key remains consumed for the lock's TTL duration. The caller receives no job ID and must retry after the TTL expires (default 1 hour). This is a fundamental trade-off of optimistic deduplication without distributed transactions.
-
-3. **Redis is a hard dependency** — SimplyDone4J does not support an embedded mode or a local queue fallback. If Redis is unavailable at startup, all services that depend on `RedisTemplate` fail to start. If Redis becomes unavailable at runtime, scheduling stops, job submissions fail, and monitoring returns no data. **Redis HA (Sentinel or Cluster) is strongly recommended for production.**
-
-4. **No embedded mode** — Requires Redis running; no local queue fallback for development or degraded mode.
-
-5. **Rate limiter fallback inconsistency** — In distributed deployments, some application instances may have the Lua script loaded while others fall back to in-memory logic, resulting in slightly different rate limiting behavior across instances.
-
-6. **Lease timeout granularity** — Lease timeouts are checked at fixed intervals (default 5s for lease reaper). Jobs with leases expiring between intervals may take up to one full interval to be recovered.
-
-7. **Scheduler polling interval** — The scheduler polls queues at a fixed interval (default 1s). For very low-latency requirements, consider event-driven integration (future enhancement).
-
-8. **No multi-tenant isolation beyond key-prefix** — Sharing a Redis instance requires manual `key-prefix` configuration. No namespace isolation at the Redis data structure level.
-
-9. **DLQ is status-only** — Jobs with `DLQ` status are not moved to a separate Redis queue; they remain in the status index. No dedicated DLQ recovery API is provided (manual Redis intervention required).
-
-10. **No job chaining** — Cannot express "run job B only if job A succeeds." No `dependsOn` field or event-based triggering for downstream jobs.
-
----
-
-### License
-
-MIT
+MIT. See [LICENSE](LICENSE).

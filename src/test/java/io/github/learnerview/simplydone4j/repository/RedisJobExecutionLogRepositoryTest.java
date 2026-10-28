@@ -1,8 +1,5 @@
 package io.github.learnerview.simplydone4j.repository;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties;
 import io.github.learnerview.simplydone4j.entity.JobExecutionLog;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +14,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.time.Instant;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -27,19 +25,37 @@ class RedisJobExecutionLogRepositoryTest {
     @Mock StringRedisTemplate redis;
     @Mock ListOperations<String, String> listOps;
 
-    ObjectMapper objectMapper;
     RedisJobExecutionLogRepository repo;
+    SimplyDoneProperties props;
 
     @BeforeEach
     void setUp() {
-        objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());
-        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        objectMapper.setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
+        // Lenient because defaultsToNotStoringExecutionLogs asserts that nothing is
+        // written, so it never reaches the list operations.
+        lenient().when(redis.opsForList()).thenReturn(listOps);
+        // Saving is opt-in, so the default-off case is asserted separately in
+        // defaultsToNotStoringExecutionLogs.
+        props = new SimplyDoneProperties();
+        props.getRetention().setStoreExecutionLogs(true);
+        repo = new RedisJobExecutionLogRepository(redis, props);
+    }
 
-        when(redis.opsForList()).thenReturn(listOps);
-        SimplyDoneProperties props = new SimplyDoneProperties();
-        repo = new RedisJobExecutionLogRepository(redis, objectMapper, props);
+    @Test
+    void defaultsToNotStoringExecutionLogs() {
+        SimplyDoneProperties defaults = new SimplyDoneProperties();
+        assertThat(defaults.getRetention().isStoreExecutionLogs())
+                .as("execution logs are a diagnostic, not engine state; opt in")
+                .isFalse();
+
+        RedisJobExecutionLogRepository quiet =
+                new RedisJobExecutionLogRepository(redis, defaults);
+        JobExecutionLog log = JobExecutionLog.builder()
+                .jobId("job-1").attempt(1).status("SUCCESS").message("x").durationMs(1L)
+                .executedAt(java.time.Instant.now()).build();
+
+        quiet.save(log);
+
+        verify(redis, never()).opsForList();
     }
 
     @Nested
@@ -88,22 +104,18 @@ class RedisJobExecutionLogRepositoryTest {
     class FindLogs {
         @Test
         void shouldFindLogsByJobId() throws Exception {
-            JobExecutionLog log1 = JobExecutionLog.builder()
-                    .id("log-1").jobId("job-1").attempt(1).status("SUCCESS").durationMs(50L).build();
-            JobExecutionLog log2 = JobExecutionLog.builder()
-                    .id("log-2").jobId("job-1").attempt(2).status("FAILED").durationMs(30L).build();
-
             String json1 = "{\"id\":\"log-1\",\"jobId\":\"job-1\",\"attempt\":1,\"status\":\"SUCCESS\",\"durationMs\":50}";
             String json2 = "{\"id\":\"log-2\",\"jobId\":\"job-1\",\"attempt\":2,\"status\":\"FAILED\",\"durationMs\":30}";
 
             when(listOps.range("simplydone4j:log:job-1", 0, -1))
-                    .thenReturn(List.of(json1, json2));
+                    .thenReturn(List.of(json2, json1));
 
             List<JobExecutionLog> logs = repo.findByJobIdOrderByAttemptAsc("job-1");
 
             assertEquals(2, logs.size());
             assertEquals("log-1", logs.get(0).getId());
             assertEquals("SUCCESS", logs.get(0).getStatus());
+            assertEquals("log-2", logs.get(1).getId());
         }
 
         @Test

@@ -11,11 +11,6 @@
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     },
     {
-      "name": "simplydone4j.rate-limit",
-      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$RateLimit",
-      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
-    },
-    {
       "name": "simplydone4j.retry",
       "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Retry",
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
@@ -39,6 +34,26 @@
       "name": "simplydone4j.monitoring",
       "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Monitoring",
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.metrics",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Metrics",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.health",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Health",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.fencing",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Fencing",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.webhook",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Webhook",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     }
   ],
   "properties": [
@@ -52,13 +67,30 @@
       "name": "simplydone4j.scheduler.polling-interval-ms",
       "type": "java.lang.Long",
       "defaultValue": 1000,
-      "description": "Polling interval for the scheduler in milliseconds."
+      "description": "How long the scheduler waits before looking again when the queues are idle. A job that becomes runnable while the scheduler waits is announced to it, so this interval is the fallback for work that becomes due because time passed (a delayed job reaching its due date, a lease expiring), not the delay before a submitted job runs."
+    },
+    {
+      "name": "simplydone4j.scheduler.busy-polling-interval-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 50,
+      "description": "How long the scheduler waits before looking again while there is work to hand out. Short, so a worker that finishes gets the next job at once; the poll itself is cheap when there is nothing to claim."
+    },
+    {
+      "name": "simplydone4j.scheduler.batch-size",
+      "type": "java.lang.Integer",
+      "defaultValue": 0,
+      "description": "Maximum jobs claimed per poll. 0 means 'as many as the workers can start right now'. The scheduler never claims more than the worker pool can run, because a job that is claimed but cannot start still holds a lease that has to be renewed until it does."
+    },
+    {
+      "name": "simplydone4j.scheduler.timer-pool-size",
+      "type": "java.lang.Integer",
+      "defaultValue": 4,
+      "description": "Threads in the library's own timer pool, used for the lease reaper, the retry promoter, the handler watchdog and the lease renewer. These run on the library's timer rather than on the host application's scheduler, so a slow Redis cannot delay a watchdog or a renewal."
     },
     {
       "name": "simplydone4j.scheduler.queue-prefix",
       "type": "java.lang.String",
-      "defaultValue": "simplydone4j:queue",
-      "description": "Redis key prefix for queue sorted sets."
+      "description": "Redis key prefix for the priority queue sorted sets. Unset by default, in which case it is derived as '<key-prefix>:queue' so that changing key-prefix moves the queues with it and tenant isolation holds. Set it explicitly only to keep queues on a different prefix."
     },
     {
       "name": "simplydone4j.scheduler.weights.high",
@@ -79,18 +111,6 @@
       "description": "Weight for low-priority queue in deficit round-robin."
     },
     {
-      "name": "simplydone4j.rate-limit.requests-per-minute",
-      "type": "java.lang.Integer",
-      "defaultValue": 60,
-      "description": "Maximum requests per minute per producer."
-    },
-    {
-      "name": "simplydone4j.rate-limit.window-seconds",
-      "type": "java.lang.Integer",
-      "defaultValue": 60,
-      "description": "Rate limit sliding window in seconds."
-    },
-    {
       "name": "simplydone4j.retry.max-attempts",
       "type": "java.lang.Integer",
       "defaultValue": 3,
@@ -98,7 +118,7 @@
     },
     {
       "name": "simplydone4j.retry.initial-delay-seconds",
-      "type": "java.lang.Integer",
+      "type": "java.lang.Long",
       "defaultValue": 5,
       "description": "Initial delay before first retry in seconds."
     },
@@ -130,19 +150,19 @@
       "name": "simplydone4j.queue.max-depth",
       "type": "java.lang.Long",
       "defaultValue": 10000,
-      "description": "Maximum total queue depth across all priorities."
+      "description": "Maximum number of queued jobs across all priority queues. Enforced atomically in one Lua script that sums the depths of the HIGH, NORMAL and LOW queues before writing, so concurrent submissions cannot both slip past the cap and the retained backlog never exceeds this value."
     },
     {
       "name": "simplydone4j.executor.core-pool-size",
       "type": "java.lang.Integer",
-      "defaultValue": 4,
-      "description": "Core thread pool size for job execution."
+      "defaultValue": 0,
+      "description": "Threads that run job handlers. 0 means 'decide from the machine': the number of available processors, clamped to between 2 and 8. Set it explicitly to pin the library to a fixed amount of the host's capacity."
     },
     {
       "name": "simplydone4j.executor.max-pool-size",
       "type": "java.lang.Integer",
-      "defaultValue": 8,
-      "description": "Maximum thread pool size for job execution."
+      "defaultValue": 0,
+      "description": "Upper bound on handler threads. 0 means the same as the core size, which is deliberate: with a bounded queue a pool does not grow past its core size until the queue is full, so a larger maximum would sit unused behind a hundred queued tasks."
     },
     {
       "name": "simplydone4j.executor.queue-capacity",
@@ -177,8 +197,8 @@
     {
       "name": "simplydone4j.ttl-days",
       "type": "java.lang.Integer",
-      "defaultValue": 30,
-      "description": "TTL in days for finished (success/failed/DLQ/cancelled) job data."
+      "defaultValue": 0,
+      "description": "Days component of the TTL applied to finished (success/failed/DLQ/cancelled) job data. Effective TTL is ttl-days*24 + ttl-hours, so the default retention is 1 hour; raise it if you need finished jobs to stay inspectable."
     },
     {
       "name": "simplydone4j.idempotency-ttl-hours",
@@ -191,6 +211,48 @@
       "type": "java.lang.Boolean",
       "defaultValue": true,
       "description": "Enable the monitoring service."
+    },
+    {
+      "name": "simplydone4j.metrics.enabled",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Publish Micrometer instruments. Silently degrades to no-op instrumentation when Micrometer is not on the classpath."
+    },
+    {
+      "name": "simplydone4j.metrics.queue-depth",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Expose the queue-depth and dead-letter gauges, sampled on a timer rather than on the scrape path. On by default; set to false to skip the sampling scan entirely."
+    },
+    {
+      "name": "simplydone4j.health.dead-letter-threshold",
+      "type": "java.lang.Integer",
+      "defaultValue": 1,
+      "description": "Dead-lettered job count at or above which health reports DOWN. 0 disables the check."
+    },
+    {
+      "name": "simplydone4j.health.max-queue-depth",
+      "type": "java.lang.Long",
+      "defaultValue": 100000,
+      "description": "Total depth across all priority queues above which health reports DOWN. 0 disables the check."
+    },
+    {
+      "name": "simplydone4j.retention.store-execution-logs",
+      "type": "java.lang.Boolean",
+      "defaultValue": false,
+      "description": "Keep a per-attempt execution log in Redis. Off by default: it is a debugging aid, not engine state."
+    },
+    {
+      "name": "simplydone4j.fencing.wait-for-replicas",
+      "type": "java.lang.Integer",
+      "defaultValue": 0,
+      "description": "How many replicas must acknowledge a fencing-token increment before the token is handed out. An acknowledged write is in the replica's replication stream, so promoting that replica keeps the sequence; without the acknowledgement a failover can reissue a token that is already in use. 0 disables the wait, which is the right default on a single-node Redis because WAIT has no replica to acknowledge it there and blocks until the timeout. Set it to 1 (or more) for Sentinel or a replica set."
+    },
+    {
+      "name": "simplydone4j.fencing.wait-timeout-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 500,
+      "description": "How long the fencing-token replication acknowledgement may take. The wait ends as soon as the replicas have acknowledged, so this bounds how long a claim can be delayed by an unhealthy replica set rather than being a fixed cost."
     }
   ]
 }
