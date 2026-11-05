@@ -11,5 +11,3 @@ simplydone4j:
   key-prefix: sd4j-test
   ttl-days: 1
   idempotency-ttl-hours: 1
-  monitoring:
-    enabled: false

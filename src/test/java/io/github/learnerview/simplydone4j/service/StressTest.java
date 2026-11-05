@@ -44,11 +44,9 @@ class StressTest {
 
     @Mock JobRepository jobRepo;
     @Mock QueueRepository queueRepo;
-    @Mock RateLimiterService rateLimiter;
     @Mock JobEventPublisher eventPublisher;
     @Mock JobExecutionLogRepository logRepo;
     @Mock IdempotencyService idempotencyService;
-    @Mock WebhookService webhookService;
     @Mock RetryService retryService;
 
     SimplyDoneProperties props = new SimplyDoneProperties();
@@ -69,8 +67,9 @@ class StressTest {
         executor.setKeepAliveSeconds(10);
         executor.setThreadNamePrefix("stress-worker-");
         executor.initialize();
+        when(jobRepo.saveIfLeaseHeld(any(), anyString())).thenReturn(true);
         return new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry,
-                eventPublisher, webhookService, executor, 30);
+                eventPublisher, executor, 30);
     }
 
     @Test
@@ -93,7 +92,7 @@ class StressTest {
         doAnswer(inv -> {
             failed.incrementAndGet();
             return null;
-        }).when(retryService).handleFailure(any(), anyString(), anyLong());
+        }).when(retryService).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
 
         ConcurrentHashMap<String, JobEntity> jobMap = new ConcurrentHashMap<>();
         when(jobRepo.findById(anyString())).thenAnswer(inv ->
@@ -167,7 +166,7 @@ class StressTest {
         doAnswer(inv -> {
             failureCount.incrementAndGet();
             return "RETRY_SCHEDULED";
-        }).when(retryService).handleFailure(any(), anyString(), anyLong());
+        }).when(retryService).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
 
         ConcurrentHashMap<String, JobEntity> jobMap = new ConcurrentHashMap<>();
         when(jobRepo.findById(anyString())).thenAnswer(inv ->
@@ -309,7 +308,7 @@ class StressTest {
         doAnswer(inv -> {
             failed.incrementAndGet();
             return "RETRY_SCHEDULED";
-        }).when(retryService).handleFailure(any(), anyString(), anyLong());
+        }).when(retryService).handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
 
         ConcurrentHashMap<String, JobEntity> jobMap = new ConcurrentHashMap<>();
         when(jobRepo.findById(anyString())).thenAnswer(inv ->

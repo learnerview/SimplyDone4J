@@ -6,5 +6,7 @@ public enum JobEvent {
     JOB_COMPLETED,
     JOB_FAILED,
     JOB_RETRY,
-    JOB_CANCELLED
+    JOB_CANCELLED,
+    JOB_REPLAYED,
+    JOB_DISCARDED
 }

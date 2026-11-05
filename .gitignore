@@ -17,3 +17,4 @@ tmpclaude-*
 .springBeans
 .sts4-cache
 scripts/demo-data.sh
+dump.rdb

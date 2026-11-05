@@ -1,11 +1,13 @@
 package io.github.learnerview.simplydone4j.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 
 import java.time.Instant;
 import java.util.Objects;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public final class JobEntity {
     private String id;
     private String jobType;
@@ -20,7 +22,6 @@ public final class JobEntity {
     private String leaseOwner;
     private String leaseToken;
     private Integer timeoutSeconds;
-    private String callbackUrl;
     private Instant startedAt;
     private Instant completedAt;
     private int attemptCount;
@@ -44,7 +45,6 @@ public final class JobEntity {
         this.leaseOwner = builder.leaseOwner;
         this.leaseToken = builder.leaseToken;
         this.timeoutSeconds = builder.timeoutSeconds;
-        this.callbackUrl = builder.callbackUrl;
         this.startedAt = builder.startedAt;
         this.completedAt = builder.completedAt;
         this.attemptCount = builder.attemptCount;
@@ -79,8 +79,6 @@ public final class JobEntity {
     public void setLeaseToken(String leaseToken) { this.leaseToken = leaseToken; }
     public Integer getTimeoutSeconds() { return timeoutSeconds; }
     public void setTimeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
-    public String getCallbackUrl() { return callbackUrl; }
-    public void setCallbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; }
     public Instant getStartedAt() { return startedAt; }
     public void setStartedAt(Instant startedAt) { this.startedAt = startedAt; }
     public Instant getCompletedAt() { return completedAt; }
@@ -110,7 +108,6 @@ public final class JobEntity {
         private String leaseOwner;
         private String leaseToken;
         private Integer timeoutSeconds;
-        private String callbackUrl;
         private Instant startedAt;
         private Instant completedAt;
         private int attemptCount;
@@ -133,7 +130,6 @@ public final class JobEntity {
         public Builder leaseOwner(String leaseOwner) { this.leaseOwner = leaseOwner; return this; }
         public Builder leaseToken(String leaseToken) { this.leaseToken = leaseToken; return this; }
         public Builder timeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; return this; }
-        public Builder callbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; return this; }
         public Builder startedAt(Instant startedAt) { this.startedAt = startedAt; return this; }
         public Builder completedAt(Instant completedAt) { this.completedAt = completedAt; return this; }
         public Builder attemptCount(int attemptCount) { this.attemptCount = attemptCount; return this; }

@@ -149,7 +149,6 @@ class JobMapperTest {
                     .nextRunAt(now)
                     .leaseOwner("worker-1")
                     .timeoutSeconds(30)
-                    .callbackUrl("https://example.com/cb")
                     .startedAt(now)
                     .completedAt(now)
                     .attemptCount(1)
@@ -169,7 +168,6 @@ class JobMapperTest {
             assertEquals("Sent OK", response.getResult());
             assertEquals("worker-1", response.getLeaseOwner());
             assertEquals(30, response.getTimeoutSeconds());
-            assertEquals("https://example.com/cb", response.getCallbackUrl());
             assertEquals(1, response.getAttemptCount());
             assertEquals(3, response.getMaxAttempts());
             assertEquals(Map.of("to", "user@test.com"), response.getPayload());
@@ -189,7 +187,6 @@ class JobMapperTest {
 
             assertEquals("job-1", response.getId());
             assertNull(response.getResult());
-            assertNull(response.getCallbackUrl());
             assertNull(response.getLeaseOwner());
             assertNull(response.getTimeoutSeconds());
             assertEquals(Map.of(), response.getPayload());

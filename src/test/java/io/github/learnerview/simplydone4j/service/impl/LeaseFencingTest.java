@@ -7,7 +7,6 @@ import io.github.learnerview.simplydone4j.model.JobPriority;
 import io.github.learnerview.simplydone4j.model.JobStatus;
 import io.github.learnerview.simplydone4j.repository.JobRepository;
 import io.github.learnerview.simplydone4j.service.RetryService;
-import io.github.learnerview.simplydone4j.service.WebhookService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,7 +27,6 @@ class LeaseFencingTest {
     @Mock JobRepository jobRepo;
     @Mock RetryService retryService;
     @Mock JobEventPublisher eventPublisher;
-    @Mock WebhookService webhookService;
 
     HandlerRegistry handlerRegistry = new HandlerRegistry();
     JobExecutorServiceImpl service;
@@ -43,7 +41,7 @@ class LeaseFencingTest {
         executor.setThreadNamePrefix("fencing-test-");
         executor.initialize();
         service = new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher,
-                webhookService, executor, 30);
+                executor, 30);
     }
 
     @Test
@@ -64,22 +62,9 @@ class LeaseFencingTest {
                 .maxAttempts(3)
                 .build();
 
-        JobEntity afterReaper = JobEntity.builder()
-                .id("job-with-expired-lease")
-                .jobType("slow-job")
-                .producer("worker-a")
-                .status(JobStatus.RETRY_SCHEDULED)
-                .priority(JobPriority.NORMAL)
-                .payload("{}")
-                .leaseToken(null)
-                .leaseOwner(null)
-                .attemptCount(1)
-                .maxAttempts(3)
-                .build();
-
-        when(jobRepo.findById("job-with-expired-lease")).thenAnswer(invocation -> {
+        when(jobRepo.saveIfLeaseHeld(any(), eq("original-lease-token"))).thenAnswer(invocation -> {
             fencingCheckDone.countDown();
-            return Optional.of(afterReaper);
+            return false;
         });
 
         service.execute(originalJob);
@@ -109,22 +94,10 @@ class LeaseFencingTest {
                 .maxAttempts(3)
                 .build();
 
-        JobEntity afterReaper = JobEntity.builder()
-                .id("job-with-expired-lease-fail")
-                .jobType("failing-job")
-                .producer("worker-a")
-                .status(JobStatus.DLQ)
-                .priority(JobPriority.NORMAL)
-                .payload("{}")
-                .leaseToken(null)
-                .leaseOwner(null)
-                .attemptCount(2)
-                .maxAttempts(3)
-                .build();
-
-        when(jobRepo.findById("job-with-expired-lease-fail")).thenAnswer(invocation -> {
+        when(retryService.handleFailureIfLeaseHeld(any(), eq("original-lease-token"),
+                anyString(), anyLong())).thenAnswer(invocation -> {
             fencingCheckDone.countDown();
-            return Optional.of(afterReaper);
+            return null;
         });
 
         service.execute(originalJob);

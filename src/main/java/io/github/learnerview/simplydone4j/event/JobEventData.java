@@ -49,8 +49,8 @@ public final class JobEventData {
                 .jobId(job.getId())
                 .jobType(job.getJobType())
                 .producer(job.getProducer())
-                .status(job.getStatus().name())
-                .priority(job.getPriority().name())
+                .status(job.getStatus() != null ? job.getStatus().name() : null)
+                .priority(job.getPriority() != null ? job.getPriority().name() : null)
                 .result(job.getResult())
                 .timestamp(Instant.now())
                 .build();

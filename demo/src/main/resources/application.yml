@@ -1,0 +1,30 @@
+server:
+  port: 8080
+
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 3s
+
+simplydone4j:
+  scheduler:
+    polling-interval-ms: 250
+    busy-polling-interval-ms: 50
+    weights:
+      high: 70
+      normal: 20
+      low: 10
+  retry:
+    max-attempts: 3
+    initial-delay-seconds: 2
+    backoff-multiplier: 2.0
+  executor:
+    core-pool-size: 2
+    max-pool-size: 4
+    queue-capacity: 50
+    default-timeout-seconds: 10
+    await-termination-seconds: 30
+  queue:
+    max-depth: 1000

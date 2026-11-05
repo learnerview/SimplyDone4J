@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.Instant;
 import java.util.List;
@@ -37,7 +38,7 @@ class RedisJobExecutionLogRepositoryTest {
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         objectMapper.setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
 
-        when(redis.opsForList()).thenReturn(listOps);
+        lenient().when(redis.opsForList()).thenReturn(listOps);
         SimplyDoneProperties props = new SimplyDoneProperties();
         repo = new RedisJobExecutionLogRepository(redis, objectMapper, props);
     }
@@ -57,9 +58,8 @@ class RedisJobExecutionLogRepositoryTest {
 
             repo.save(log);
 
-            verify(listOps).leftPush(eq("simplydone4j:log:job-1"), anyString());
-            verify(listOps).trim(eq("simplydone4j:log:job-1"), eq(0L), eq(49L));
-            verify(redis).expire(eq("simplydone4j:log:job-1"), any(java.time.Duration.class));
+            verify(redis).execute(any(RedisScript.class), eq(List.of("simplydone4j:log:job-1")),
+                    anyString(), eq("49"), eq("604800"));
         }
 
         @Test
@@ -80,7 +80,19 @@ class RedisJobExecutionLogRepositoryTest {
         void shouldSaveAndNotThrow() {
             JobExecutionLog log = JobExecutionLog.builder().jobId("job-1").attempt(1).status("OK").build();
             assertDoesNotThrow(() -> repo.save(log));
-            verify(listOps).leftPush(anyString(), anyString());
+            verify(redis).execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString());
+        }
+
+        @Test
+        void shouldFloorAZeroRetentionLimit() {
+            SimplyDoneProperties props = new SimplyDoneProperties();
+            props.getRetention().setMaxExecutionLogsPerJob(0);
+            RedisJobExecutionLogRepository zero = new RedisJobExecutionLogRepository(
+                    redis, objectMapper, props);
+
+            zero.save(JobExecutionLog.builder().jobId("job-1").attempt(1).status("OK").build());
+
+            verify(redis).execute(any(RedisScript.class), anyList(), anyString(), eq("0"), anyString());
         }
     }
 

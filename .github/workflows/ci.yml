@@ -12,6 +12,16 @@ jobs:
     strategy:
       matrix:
         java: [ 21 ]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - name: Set up Java
@@ -20,5 +30,7 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: temurin
           cache: maven
-      - name: Build and test
-        run: mvn -B clean verify
+      - name: Build and test library
+        run: mvn -B clean install -Dit.redis.host=localhost -Dit.redis.port=6379
+      - name: Build and test demo
+        run: mvn -B -f demo/pom.xml verify

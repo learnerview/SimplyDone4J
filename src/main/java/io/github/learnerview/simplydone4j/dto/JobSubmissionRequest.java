@@ -23,8 +23,6 @@ public final class JobSubmissionRequest {
     @Min(1)
     private Integer timeoutSeconds;
 
-    private String callbackUrl;
-
     public String getJobType() { return jobType; }
     public void setJobType(String jobType) { this.jobType = jobType; }
     public String getIdempotencyKey() { return idempotencyKey; }
@@ -39,6 +37,4 @@ public final class JobSubmissionRequest {
     public void setMaxAttempts(Integer maxAttempts) { this.maxAttempts = maxAttempts; }
     public Integer getTimeoutSeconds() { return timeoutSeconds; }
     public void setTimeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
-    public String getCallbackUrl() { return callbackUrl; }
-    public void setCallbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; }
 }

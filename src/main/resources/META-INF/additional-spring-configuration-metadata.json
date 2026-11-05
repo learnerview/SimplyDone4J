@@ -11,11 +11,6 @@
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     },
     {
-      "name": "simplydone4j.rate-limit",
-      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$RateLimit",
-      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
-    },
-    {
       "name": "simplydone4j.retry",
       "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Retry",
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
@@ -31,13 +26,23 @@
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     },
     {
+      "name": "simplydone4j.submission",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Submission",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
       "name": "simplydone4j.executor",
       "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Executor",
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     },
     {
-      "name": "simplydone4j.monitoring",
-      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Monitoring",
+      "name": "simplydone4j.retention",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Retention",
+      "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
+    },
+    {
+      "name": "simplydone4j.redis",
+      "type": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties$Redis",
       "sourceType": "io.github.learnerview.simplydone4j.autoconfigure.SimplyDoneProperties"
     }
   ],
@@ -53,6 +58,18 @@
       "type": "java.lang.Long",
       "defaultValue": 1000,
       "description": "Polling interval for the scheduler in milliseconds."
+    },
+    {
+      "name": "simplydone4j.scheduler.busy-polling-interval-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 25,
+      "description": "Sleep in milliseconds between claim attempts while at least one permit is held. Shorter than the idle polling interval."
+    },
+    {
+      "name": "simplydone4j.scheduler.max-claim-batch",
+      "type": "java.lang.Integer",
+      "defaultValue": 256,
+      "description": "Maximum number of ready jobs claimed from one priority queue per scheduler poll."
     },
     {
       "name": "simplydone4j.scheduler.queue-prefix",
@@ -79,18 +96,6 @@
       "description": "Weight for low-priority queue in deficit round-robin."
     },
     {
-      "name": "simplydone4j.rate-limit.requests-per-minute",
-      "type": "java.lang.Integer",
-      "defaultValue": 60,
-      "description": "Maximum requests per minute per producer."
-    },
-    {
-      "name": "simplydone4j.rate-limit.window-seconds",
-      "type": "java.lang.Integer",
-      "defaultValue": 60,
-      "description": "Rate limit sliding window in seconds."
-    },
-    {
       "name": "simplydone4j.retry.max-attempts",
       "type": "java.lang.Integer",
       "defaultValue": 3,
@@ -109,6 +114,18 @@
       "description": "Exponential backoff multiplier for retry delays."
     },
     {
+      "name": "simplydone4j.retry.jitter-factor",
+      "type": "java.lang.Double",
+      "defaultValue": 0.1,
+      "description": "Random spread applied to each retry delay, as a fraction of the base delay (0.0 disables, 1.0 allows +/-100%)."
+    },
+    {
+      "name": "simplydone4j.worker.maintenance-pool-size",
+      "type": "java.lang.Integer",
+      "defaultValue": 3,
+      "description": "Threads reserved for retry promotion, lease recovery, and orphan reconciliation so one blocked task cannot stall the others."
+    },
+    {
       "name": "simplydone4j.worker.lease-timeout-seconds",
       "type": "java.lang.Integer",
       "defaultValue": 30,
@@ -121,16 +138,70 @@
       "description": "Interval for promoting retry-scheduled jobs back to queue."
     },
     {
+      "name": "simplydone4j.worker.retry-promoter-scan-limit",
+      "type": "java.lang.Integer",
+      "defaultValue": 100,
+      "description": "Maximum due retry records promoted per retry-promoter pass."
+    },
+    {
       "name": "simplydone4j.worker.lease-reaper-interval-ms",
       "type": "java.lang.Long",
       "defaultValue": 5000,
       "description": "Interval for recovering expired leases."
     },
     {
+      "name": "simplydone4j.worker.lease-reaper-scan-limit",
+      "type": "java.lang.Integer",
+      "defaultValue": 100,
+      "description": "Maximum expired lease records inspected per reaper pass."
+    },
+    {
+      "name": "simplydone4j.worker.orphan-reconcile-interval-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 15000,
+      "description": "Interval for re-queueing QUEUED records that have no priority-queue entry after a crash."
+    },
+    {
+      "name": "simplydone4j.worker.orphan-reconcile-scan-limit",
+      "type": "java.lang.Integer",
+      "defaultValue": 200,
+      "description": "Maximum orphaned QUEUED records inspected per reconciliation pass."
+    },
+    {
+      "name": "simplydone4j.worker.orphan-grace-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 5000,
+      "description": "Age a QUEUED record must reach before orphan reconciliation may re-queue it, protecting in-flight submissions."
+    },
+    {
+      "name": "simplydone4j.submission.reservation-record-wait-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 1000,
+      "description": "Maximum time a duplicate submission waits for the reservation owner's job record to become visible."
+    },
+    {
+      "name": "simplydone4j.submission.admission-wait-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 1000,
+      "description": "Maximum time duplicate resolution waits for a QUEUED job's queue admission to become visible before returning a retryable conflict."
+    },
+    {
+      "name": "simplydone4j.submission.resolve-poll-interval-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 25,
+      "description": "Polling interval used while resolving an in-flight duplicate submission."
+    },
+    {
+      "name": "simplydone4j.submission.max-payload-bytes",
+      "type": "java.lang.Long",
+      "defaultValue": 1048576,
+      "description": "Maximum serialized payload size in UTF-8 bytes. A value of 0 disables the limit."
+    },
+    {
       "name": "simplydone4j.queue.max-depth",
       "type": "java.lang.Long",
       "defaultValue": 10000,
-      "description": "Maximum total queue depth across all priorities."
+      "description": "Admission cap for submissions and scheduled retries across all priority queues. Claim restoration may briefly exceed it by the in-flight worker count."
     },
     {
       "name": "simplydone4j.executor.core-pool-size",
@@ -148,7 +219,7 @@
       "name": "simplydone4j.executor.queue-capacity",
       "type": "java.lang.Integer",
       "defaultValue": 100,
-      "description": "Executor work queue capacity."
+      "description": "Retained for compatibility. Dispatch hands work directly to a worker thread so a queued task cannot let its lease expire before execution."
     },
     {
       "name": "simplydone4j.executor.keep-alive-seconds",
@@ -169,6 +240,30 @@
       "description": "Seconds to wait for thread pool to terminate on shutdown."
     },
     {
+      "name": "simplydone4j.retention.clear-payload-on-completion",
+      "type": "java.lang.Boolean",
+      "defaultValue": false,
+      "description": "Clear the stored job payload when a job reaches a terminal state."
+    },
+    {
+      "name": "simplydone4j.retention.store-execution-logs",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Persist execution logs for job runs."
+    },
+    {
+      "name": "simplydone4j.retention.max-execution-logs-per-job",
+      "type": "java.lang.Integer",
+      "defaultValue": 50,
+      "description": "Maximum execution log entries retained per job."
+    },
+    {
+      "name": "simplydone4j.retention.execution-log-ttl-days",
+      "type": "java.lang.Integer",
+      "defaultValue": 7,
+      "description": "Retention period for execution log entries in days."
+    },
+    {
       "name": "simplydone4j.key-prefix",
       "type": "java.lang.String",
       "defaultValue": "simplydone4j",
@@ -177,8 +272,14 @@
     {
       "name": "simplydone4j.ttl-days",
       "type": "java.lang.Integer",
-      "defaultValue": 30,
-      "description": "TTL in days for finished (success/failed/DLQ/cancelled) job data."
+      "defaultValue": 0,
+      "description": "TTL in days for finished (success/failed/DLQ/cancelled) job data. Combined with ttl-hours."
+    },
+    {
+      "name": "simplydone4j.ttl-hours",
+      "type": "java.lang.Integer",
+      "defaultValue": 1,
+      "description": "TTL in hours for finished job data. The effective retention is max(1, ttl-days * 24 + ttl-hours) hours."
     },
     {
       "name": "simplydone4j.idempotency-ttl-hours",
@@ -187,10 +288,55 @@
       "description": "TTL in hours for idempotency lock entries."
     },
     {
-      "name": "simplydone4j.monitoring.enabled",
+      "name": "simplydone4j.redis.sentinel-master",
+      "type": "java.lang.String",
+      "description": "Redis Sentinel master name. Requires simplydone4j.redis.sentinel-nodes."
+    },
+    {
+      "name": "simplydone4j.redis.sentinel-nodes",
+      "type": "java.util.List<java.lang.String>",
+      "description": "Sentinel or Cluster nodes as host:port entries."
+    },
+    {
+      "name": "simplydone4j.redis.cluster-mode",
       "type": "java.lang.Boolean",
-      "defaultValue": true,
-      "description": "Enable the monitoring service."
+      "defaultValue": false,
+      "description": "Treat sentinel-nodes as a Redis Cluster rather than Sentinel nodes."
+    },
+    {
+      "name": "simplydone4j.redis.password",
+      "type": "java.lang.String",
+      "description": "Password for authenticated Sentinel or Cluster connections."
+    },
+    {
+      "name": "simplydone4j.redis.pool-max-total",
+      "type": "java.lang.Integer",
+      "defaultValue": 64,
+      "description": "Maximum pooled Lettuce connections for Sentinel/Cluster factories, including dedicated WATCH/MULTI connections."
+    },
+    {
+      "name": "simplydone4j.redis.pool-max-idle",
+      "type": "java.lang.Integer",
+      "defaultValue": 16,
+      "description": "Maximum idle pooled Lettuce connections for Sentinel/Cluster factories."
+    },
+    {
+      "name": "simplydone4j.redis.pool-min-idle",
+      "type": "java.lang.Integer",
+      "defaultValue": 4,
+      "description": "Minimum idle pooled Lettuce connections maintained for Sentinel/Cluster factories."
+    },
+    {
+      "name": "simplydone4j.redis.pool-max-wait-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 2000,
+      "description": "Maximum time to wait for a pooled connection before failing."
+    },
+    {
+      "name": "simplydone4j.redis.command-timeout-ms",
+      "type": "java.lang.Long",
+      "defaultValue": 5000,
+      "description": "Timeout for Sentinel/Cluster Redis commands, bounding health checks and submissions when Redis is unreachable."
     }
   ]
 }

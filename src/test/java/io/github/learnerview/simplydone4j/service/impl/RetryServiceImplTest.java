@@ -19,6 +19,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import java.time.Instant;
+
 @ExtendWith(MockitoExtension.class)
 class RetryServiceImplTest {
 
@@ -86,5 +88,71 @@ class RetryServiceImplTest {
 
         service.logSuccess(job, "Success", 50L);
         verify(logRepo).save(any(JobExecutionLog.class));
+    }
+
+    @Test
+    void shouldApplyFailureWhenTheLeaseIsStillOverdueAtWriteTime() {
+        JobEntity job = JobEntity.builder()
+                .id("job-1")
+                .jobType("test")
+                .producer("producer-1")
+                .status(JobStatus.RUNNING)
+                .priority(JobPriority.NORMAL)
+                .attemptCount(0)
+                .maxAttempts(3)
+                .leaseToken("tok")
+                .visibleAt(Instant.now().minusSeconds(120))
+                .build();
+        when(jobRepo.saveIfLeaseHeldOverdue(any(), eq("tok"), any())).thenReturn(true);
+
+        String outcome = service.handleFailureIfLeaseHeldOverdue(job, "tok", Instant.now(), "lease expired", 0L);
+
+        assertEquals("RETRY_SCHEDULED", outcome);
+        assertEquals(JobStatus.RETRY_SCHEDULED, job.getStatus());
+        verify(jobRepo, never()).saveIfLeaseHeld(any(), anyString());
+    }
+
+    @Test
+    void shouldDiscardFailureWhenTheLeaseWasRenewedPastTheDeadline() {
+        JobEntity job = JobEntity.builder()
+                .id("job-1")
+                .jobType("test")
+                .producer("producer-1")
+                .status(JobStatus.RUNNING)
+                .priority(JobPriority.NORMAL)
+                .attemptCount(0)
+                .maxAttempts(3)
+                .leaseToken("tok")
+                .visibleAt(Instant.now().plusSeconds(120))
+                .build();
+        when(jobRepo.saveIfLeaseHeldOverdue(any(), eq("tok"), any())).thenReturn(false);
+
+        String outcome = service.handleFailureIfLeaseHeldOverdue(job, "tok", Instant.now(), "lease expired", 0L);
+
+        assertNull(outcome, "a renewed lease must survive the reaper's write");
+        verify(logRepo, never()).save(any(JobExecutionLog.class));
+        verify(eventPublisher, never()).publish(any(), any());
+    }
+
+    @Test
+    void shouldNotCheckTheDeadlineOnTheUnfencedPath() {
+        JobEntity job = JobEntity.builder()
+                .id("job-1")
+                .jobType("test")
+                .producer("producer-1")
+                .status(JobStatus.RUNNING)
+                .priority(JobPriority.NORMAL)
+                .attemptCount(0)
+                .maxAttempts(3)
+                .leaseToken("tok")
+                .visibleAt(Instant.now().plusSeconds(120))
+                .build();
+        when(jobRepo.saveIfLeaseHeld(any(), eq("tok"))).thenReturn(true);
+
+        String outcome = service.handleFailureIfLeaseHeld(job, "tok", "handler failed", 0L);
+
+        assertEquals("RETRY_SCHEDULED", outcome,
+                "the executor path must not reject a lease that is merely close to its deadline");
+        verify(jobRepo, never()).saveIfLeaseHeldOverdue(any(), anyString(), any());
     }
 }

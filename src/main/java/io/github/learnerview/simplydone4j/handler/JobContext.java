@@ -4,8 +4,6 @@ import io.github.learnerview.simplydone4j.entity.JobEntity;
 
 import java.time.Instant;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 public final class JobContext {
     private final String jobId;
@@ -16,8 +14,6 @@ public final class JobContext {
     private final int maxAttempts;
     private final int timeoutSeconds;
     private final Instant deadline;
-    private final AtomicBoolean cancellationRequested;
-    private final AtomicReference<ProgressCallback> progressCallback;
 
     private JobContext(Builder builder) {
         this.jobId = Objects.requireNonNull(builder.jobId, "jobId");
@@ -28,11 +24,25 @@ public final class JobContext {
         this.maxAttempts = builder.maxAttempts;
         this.timeoutSeconds = builder.timeoutSeconds;
         this.deadline = builder.deadline;
-        this.cancellationRequested = builder.cancellationRequested;
-        this.progressCallback = builder.progressCallback;
     }
 
     public static JobContext from(JobEntity job) {
+        return from(job, 0);
+    }
+
+    /**
+     * Like {@link #from(JobEntity)}, but falls back to {@code defaultTimeoutSeconds} when the
+     * job does not carry its own per-job timeout, mirroring the executor, so a handler can
+     * see the deadline that the watchdog will actually enforce.
+     */
+    public static JobContext from(JobEntity job, int defaultTimeoutSeconds) {
+        Instant startedAt = job.getStartedAt();
+        return from(job, defaultTimeoutSeconds, startedAt);
+    }
+
+    public static JobContext from(JobEntity job, int defaultTimeoutSeconds, Instant startedAt) {
+        int timeoutSeconds = job.getTimeoutSeconds() != null && job.getTimeoutSeconds() > 0
+                ? job.getTimeoutSeconds() : defaultTimeoutSeconds;
         return builder()
                 .jobId(job.getId())
                 .jobType(job.getJobType())
@@ -40,18 +50,15 @@ public final class JobContext {
                 .payload(job.getPayload())
                 .attemptCount(job.getAttemptCount())
                 .maxAttempts(job.getMaxAttempts())
-                .timeoutSeconds(job.getTimeoutSeconds())
-                .deadline(computeDeadline(job))
-                .cancellationRequested(new AtomicBoolean(false))
-                .progressCallback(new AtomicReference<>())
+                .timeoutSeconds(timeoutSeconds)
+                .deadline(computeDeadline(startedAt, timeoutSeconds))
                 .build();
     }
 
-    private static Instant computeDeadline(JobEntity job) {
-        if (job.getTimeoutSeconds() != null && job.getTimeoutSeconds() > 0) {
-            return job.getCreatedAt() != null
-                    ? job.getCreatedAt().plusSeconds(job.getTimeoutSeconds())
-                    : Instant.now().plusSeconds(job.getTimeoutSeconds());
+    private static Instant computeDeadline(Instant startedAt, int timeoutSeconds) {
+        if (timeoutSeconds > 0) {
+            Instant base = startedAt != null ? startedAt : Instant.now();
+            return base.plusSeconds(timeoutSeconds);
         }
         return null;
     }
@@ -66,28 +73,6 @@ public final class JobContext {
 
     public Instant getDeadline() { return deadline; }
 
-    public boolean isCancellationRequested() {
-        return cancellationRequested != null && cancellationRequested.get();
-    }
-
-    public void requestCancellation() {
-        if (cancellationRequested != null) {
-            cancellationRequested.set(true);
-        }
-    }
-
-    public double getProgress() {
-        ProgressCallback cb = progressCallback != null ? progressCallback.get() : null;
-        return cb != null ? cb.progress() : 0.0;
-    }
-
-    public void setProgress(double percent, String message) {
-        ProgressCallback cb = progressCallback != null ? progressCallback.get() : null;
-        if (cb != null) {
-            cb.update(percent, message);
-        }
-    }
-
     public static Builder builder() { return new Builder(); }
 
     public static final class Builder {
@@ -99,13 +84,7 @@ public final class JobContext {
         private int maxAttempts;
         private int timeoutSeconds;
         private Instant deadline;
-        private AtomicBoolean cancellationRequested;
-        private AtomicReference<ProgressCallback> progressCallback;
-
-        private Builder() {
-            this.cancellationRequested = new AtomicBoolean(false);
-            this.progressCallback = new AtomicReference<>();
-        }
+        private Builder() {}
 
         public Builder jobId(String jobId) { this.jobId = jobId; return this; }
         public Builder jobType(String jobType) { this.jobType = jobType; return this; }
@@ -115,13 +94,6 @@ public final class JobContext {
         public Builder maxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; return this; }
         public Builder timeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds != null ? timeoutSeconds : 0; return this; }
         public Builder deadline(Instant deadline) { this.deadline = deadline; return this; }
-        public Builder cancellationRequested(AtomicBoolean cancellationRequested) { this.cancellationRequested = cancellationRequested; return this; }
-        public Builder progressCallback(AtomicReference<ProgressCallback> progressCallback) { this.progressCallback = progressCallback; return this; }
         public JobContext build() { return new JobContext(this); }
-    }
-
-    public interface ProgressCallback {
-        void update(double percent, String message);
-        double progress();
     }
 }

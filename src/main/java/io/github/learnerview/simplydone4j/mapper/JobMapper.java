@@ -8,6 +8,7 @@ import io.github.learnerview.simplydone4j.model.JobPriority;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Locale;
 import java.util.Map;
 
 public final class JobMapper {
@@ -24,15 +25,14 @@ public final class JobMapper {
                 .jobType(job.getJobType())
                 .producer(job.getProducer())
                 .idempotencyKey(job.getIdempotencyKey())
-                .status(job.getStatus().name())
-                .priority(job.getPriority().name())
+                .status(job.getStatus() != null ? job.getStatus().name() : null)
+                .priority(job.getPriority() != null ? job.getPriority().name() : null)
                 .payload(deserializePayload(job.getPayload()))
                 .result(job.getResult())
                 .nextRunAt(job.getNextRunAt())
                 .visibleAt(job.getVisibleAt())
                 .leaseOwner(job.getLeaseOwner())
                 .timeoutSeconds(job.getTimeoutSeconds())
-                .callbackUrl(job.getCallbackUrl())
                 .startedAt(job.getStartedAt())
                 .completedAt(job.getCompletedAt())
                 .attemptCount(job.getAttemptCount())
@@ -65,7 +65,7 @@ public final class JobMapper {
     public JobPriority parsePriority(String priority) {
         if (priority == null || priority.isBlank()) return JobPriority.NORMAL;
         try {
-            return JobPriority.valueOf(priority.toUpperCase());
+            return JobPriority.valueOf(priority.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             return JobPriority.NORMAL;
         }

@@ -7,6 +7,16 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - name: Import GPG key
@@ -24,7 +34,7 @@ jobs:
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
       - name: Build and verify
-        run: mvn -B clean verify
+        run: mvn -B clean verify -Dit.redis.host=localhost -Dit.redis.port=6379
       - name: Publish to Maven Central
         run: mvn -B deploy -Prelease -DskipTests -Dgpg.passphrase=${{ secrets.MAVEN_GPG_PASSPHRASE }}
         env:

@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <title>ParcelFlow | SimplyDone4J operations</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" data-view-target="overview">
+      <span class="brand-mark">P</span>
+      <span>ParcelFlow<small>SimplyDone4J operations</small></span>
+    </a>
+    <div class="topbar-tools">
+      <span id="clock" class="clock">--:--:--</span>
+      <span id="health-pill" class="health-pill">
+        <span id="health-dot" class="pulse"></span>
+        <span id="health">Connecting</span>
+      </span>
+      <label class="auto-refresh"><input id="auto-refresh" type="checkbox" checked> Live</label>
+      <button id="help-button" class="icon-button" title="Plain-English help" aria-label="Plain-English help">?</button>
+      <button id="refresh-now" class="icon-button" title="Refresh now" aria-label="Refresh now">&#8635;</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <nav class="nav">
+        <p class="nav-label">Operations</p>
+        <button class="nav-link active" data-view="overview"><span>01</span> Overview</button>
+        <button class="nav-link" data-view="orders"><span>02</span> Orders</button>
+        <button class="nav-link" data-view="jobs"><span>03</span> Jobs</button>
+        <button class="nav-link" data-view="dlq"><span>04</span> Dead letters <b id="nav-dlq-count" class="nav-count">0</b></button>
+        <p class="nav-label">Runtime</p>
+        <button class="nav-link" data-view="engine"><span>05</span> Engine</button>
+        <button class="nav-link" data-view="workload"><span>06</span> Workload lab</button>
+        <button class="nav-link" data-view="architecture"><span>07</span> Architecture</button>
+      </nav>
+      <div class="sidebar-status">
+        <div><span>Queue</span><b id="sidebar-queue">0</b></div>
+        <div><span>Workers</span><b id="sidebar-workers">0 / 0</b></div>
+        <div><span>DLQ</span><b id="sidebar-dlq">0</b></div>
+      </div>
+      <div class="sidebar-note">
+        <strong>Real work, real recovery.</strong>
+        <p>Orders reserve stock, submit a durable job, and move through leases, retries, and dead-letter recovery.</p>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section id="view-overview" class="view active">
+        <div class="hero">
+          <div>
+            <p class="eyebrow">LIVE CONTROL ROOM</p>
+            <h1>Every order, every worker, one view.</h1>
+            <p class="subheading">Watch checkout, inventory, payment, and delivery move through the engine in real time.</p>
+          </div>
+          <div class="hero-actions">
+            <button class="button primary" id="new-order">Place order</button>
+            <button class="button secondary" data-view-target="workload">Generate workload</button>
+          </div>
+        </div>
+
+        <div class="story-strip" aria-label="How the demo works in three steps">
+          <div class="story-heading">The 30-second version</div>
+          <div class="story-step"><span class="story-num">1</span><div><b>Customer places an order</b><small>Stock is reserved immediately so two people cannot buy the last item.</small></div></div>
+          <span class="story-arrow">&rarr;</span>
+          <div class="story-step"><span class="story-num">2</span><div><b>The engine runs the work</b><small>The app saves a work ticket, called a job, and a worker processes it.</small></div></div>
+          <span class="story-arrow">&rarr;</span>
+          <div class="story-step"><span class="story-num">3</span><div><b>Failures get a plan</b><small>Retries handle temporary problems. Dead letters keep failures visible for a human decision.</small></div></div>
+        </div>
+
+        <div id="health-strip" class="health-strip"></div>
+        <div id="metrics" class="metric-grid"></div>
+        <div class="overview-grid">
+          <div class="panel">
+            <div class="panel-heading">
+              <div><h2>Queue lanes</h2><p>Weighted scheduling across HIGH, NORMAL, and LOW</p></div>
+              <span class="live-tag">LIVE</span>
+            </div>
+            <div id="queue-lanes" class="queue-lanes"></div>
+            <div id="pipeline" class="pipeline"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading"><div><h2>Worker capacity</h2><p>Local execution slots for this instance</p></div></div>
+            <div id="worker-panel" class="worker-panel"></div>
+          </div>
+        </div>
+        <div class="two-column">
+          <div class="panel">
+            <div class="panel-heading"><div><h2>Recent orders</h2><p>Each order is backed by a durable job</p></div><button class="text-button" data-view-target="orders">View all</button></div>
+            <div id="recent-orders" class="order-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading"><div><h2>Recent jobs</h2><p>Latest work accepted by the engine</p></div><button class="text-button" data-view-target="jobs">View all</button></div>
+            <div id="recent-jobs" class="compact-list"></div>
+          </div>
+        </div>
+        <div class="two-column">
+          <div class="panel">
+            <div class="panel-heading"><div><h2>Activity stream</h2><p>Job lifecycle events from this instance</p></div></div>
+            <div id="activity" class="activity-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading"><div><h2>Customer notifications</h2><p>Application-side messages produced by workers</p></div></div>
+            <div id="notifications" class="notification-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-orders" class="view">
+        <div class="page-heading">
+          <div><p class="eyebrow">CUSTOMER WORK</p><h1>Orders</h1><p class="subheading">Place orders, inspect lifecycle progress, and cancel before shipment.</p></div>
+          <div class="hero-actions"><button class="button primary" id="new-order-2">Place order</button></div>
+        </div>
+        <div class="explainer">
+          <span class="explainer-icon">i</span>
+          <div><strong>In plain English</strong><p>An order is what the customer wants. The application saves it, reserves stock, then hands a work ticket to the engine. Click any order to see its story from checkout to delivery.</p></div>
+        </div>
+        <div id="order-stats" class="stat-strip"></div>
+        <div class="panel">
+          <div class="toolbar">
+            <input id="order-search" class="search" placeholder="Search order, customer, or product">
+            <select id="order-filter" class="select">
+              <option value="ALL">All statuses</option>
+              <option>ACCEPTED</option><option>PROCESSING</option><option>RETRYING</option>
+              <option>COMPLETED</option><option>CANCELLED</option><option>FAILED</option>
+            </select>
+            <button class="button secondary" id="refresh-orders">Refresh</button>
+          </div>
+          <div id="orders-table"></div>
+        </div>
+      </section>
+
+      <section id="view-jobs" class="view">
+        <div class="page-heading">
+          <div><p class="eyebrow">ENGINE INSPECTOR</p><h1>Jobs</h1><p class="subheading">Search every job, inspect payloads and execution logs, cancel queued work, or replay failures.</p></div>
+          <div class="hero-actions"><button class="button primary" data-view-target="workload">Submit a job</button></div>
+        </div>
+        <div class="explainer">
+          <span class="explainer-icon">i</span>
+          <div><strong>Think of a job as a work ticket</strong><p>The engine accepts the ticket, a worker picks it up, and every attempt is recorded. Click a job to see its payload, result, and attempt history. No code reading required.</p></div>
+        </div>
+        <div id="job-stats" class="stat-strip"></div>
+        <div class="panel">
+          <div class="toolbar">
+            <input id="job-search" class="search" placeholder="Search job id, type, producer, payload, result">
+            <select id="job-status-filter" class="select">
+              <option value="ALL">All statuses</option>
+              <option>QUEUED</option><option>PROCESSING</option><option>SUCCESS</option>
+              <option>RETRY_SCHEDULED</option><option>DLQ</option><option>FAILED</option><option>CANCELLED</option>
+            </select>
+            <select id="job-priority-filter" class="select select-small">
+              <option value="ALL">All lanes</option><option>HIGH</option><option>NORMAL</option><option>LOW</option>
+            </select>
+            <button class="button secondary" id="refresh-jobs">Refresh</button>
+          </div>
+          <div id="jobs-table"></div>
+        </div>
+      </section>
+
+      <section id="view-dlq" class="view">
+        <div class="page-heading">
+          <div><p class="eyebrow">RECOVERY DESK</p><h1>Dead letters</h1><p class="subheading">Inspect exhausted jobs, replay them with a fresh attempt budget, or discard them permanently.</p></div>
+          <div class="hero-actions"><button class="button secondary" id="refresh-dlq">Refresh</button></div>
+        </div>
+        <div class="explainer">
+          <span class="explainer-icon">i</span>
+          <div><strong>Dead letter means &ldquo;needs a human decision&rdquo;</strong><p>This job used all of its allowed attempts and still failed. <b>Replay</b> gives it a fresh set of attempts. <b>Discard</b> removes it permanently. Nothing disappears silently.</p></div>
+        </div>
+        <div id="dlq-hero" class="dlq-hero"></div>
+        <div class="panel">
+          <div class="toolbar">
+            <input id="dlq-search" class="search" placeholder="Search dead-lettered jobs">
+            <button class="button secondary" id="refresh-dlq-2">Refresh</button>
+          </div>
+          <div id="dlq-list"></div>
+        </div>
+      </section>
+
+      <section id="view-engine" class="view">
+        <div class="page-heading">
+          <div><p class="eyebrow">RUNTIME HEALTH</p><h1>Engine</h1><p class="subheading">Dependency reachability, loop liveness, queue depth, worker utilization, and runtime configuration.</p></div>
+          <div class="hero-actions"><button class="button secondary" id="refresh-engine">Refresh</button></div>
+        </div>
+        <div class="explainer">
+          <span class="explainer-icon">i</span>
+          <div><strong>The engine is the kitchen</strong><p>The <b>queue</b> is the stack of waiting tickets. <b>Workers</b> are the cooks. The <b>loop</b> is the manager checking for new work. Green means the kitchen is open; red means something needs attention.</p></div>
+        </div>
+        <div id="engine-hero" class="engine-hero"></div>
+        <div id="engine-cards" class="metric-grid"></div>
+        <div class="two-column">
+          <div class="panel"><div class="panel-heading"><div><h2>Queue depth</h2><p>Live membership in each priority lane</p></div></div><div id="engine-queues" class="queue-lanes"></div></div>
+          <div class="panel"><div class="panel-heading"><div><h2>Job states</h2><p>Durable records by lifecycle state</p></div></div><div id="engine-job-counts" class="state-list"></div></div>
+        </div>
+        <div class="panel"><div class="panel-heading"><div><h2>Runtime configuration</h2><p>Values supplied by the starter and this demo</p></div></div><div id="engine-config" class="config-grid"></div></div>
+      </section>
+
+      <section id="view-workload" class="view">
+        <div class="page-heading">
+          <div><p class="eyebrow">WORKLOAD LAB</p><h1>Exercise the engine</h1><p class="subheading">Submit one job, generate a burst, or place real orders with optional failure injection.</p></div>
+        </div>
+        <div class="explainer">
+          <span class="explainer-icon">i</span>
+          <div><strong>A safe practice range</strong><p>Every button here creates real work in this demo. Start with one job, then try a burst, then place real orders. If something fails, the Dead letters page shows exactly what happened and lets you retry.</p></div>
+        </div>
+        <div class="workload-grid">
+          <form id="custom-job-form" class="panel form-panel">
+            <div class="panel-heading"><div><h2>Submit one job</h2><p>Uses the public JobSubmissionService path</p></div></div>
+            <label>Job type<select id="custom-job-type"></select></label>
+            <div class="form-row">
+              <label>Priority<select id="custom-job-priority"><option>HIGH</option><option selected>NORMAL</option><option>LOW</option></select></label>
+              <label>Max attempts<input id="custom-job-attempts" type="number" min="1" max="10" value="3"></label>
+            </div>
+            <div class="form-row">
+              <label>Timeout seconds<input id="custom-job-timeout" type="number" min="1" max="120" placeholder="default"></label>
+              <label>Delay ms<input id="custom-job-delay" type="number" min="0" max="600000" value="0"></label>
+            </div>
+            <label>Payload JSON<textarea id="custom-job-payload" rows="7" spellcheck="false">{
+  "orderId": "DEMO-ORDER",
+  "customer": "Asha Patel",
+  "items": 2
+}</textarea></label>
+            <button class="button primary" type="submit">Submit job</button>
+          </form>
+
+          <form id="batch-job-form" class="panel form-panel">
+            <div class="panel-heading"><div><h2>Generate a job burst</h2><p>Server-side batch submission with isolated failures</p></div></div>
+            <label>Job type<select id="batch-job-type"></select></label>
+            <div class="form-row">
+              <label>Count<input id="batch-job-count" type="number" min="1" max="200" value="20"></label>
+              <label>Priority<select id="batch-job-priority"><option>HIGH</option><option selected>NORMAL</option><option>LOW</option></select></label>
+            </div>
+            <div class="form-row">
+              <label>Max attempts<input id="batch-job-attempts" type="number" min="1" max="10" value="3"></label>
+              <label>Timeout seconds<input id="batch-job-timeout" type="number" min="1" max="120" placeholder="default"></label>
+            </div>
+            <div class="form-row">
+              <label>Delay ms<input id="batch-job-delay" type="number" min="0" max="600000" value="0"></label>
+              <label>Stagger ms<input id="batch-job-stagger" type="number" min="0" max="60000" value="0"></label>
+            </div>
+            <label>Payload JSON<textarea id="batch-job-payload" rows="5" spellcheck="false">{
+  "customer": "Batch customer",
+  "items": 1
+}</textarea></label>
+            <button class="button primary" type="submit">Generate load</button>
+          </form>
+
+          <form id="batch-order-form" class="panel form-panel">
+            <div class="panel-heading"><div><h2>Place real orders</h2><p>Reserves inventory and submits fulfillment jobs</p></div></div>
+            <label>Product<select id="batch-order-sku"></select></label>
+            <div class="form-row">
+              <label>Count<input id="batch-order-count" type="number" min="1" max="50" value="6"></label>
+              <label>Quantity each<input id="batch-order-quantity" type="number" min="1" max="5" value="1"></label>
+            </div>
+            <label>Priority<select id="batch-order-priority"><option>HIGH</option><option selected>NORMAL</option><option>LOW</option></select></label>
+            <label class="checkbox"><input id="batch-order-retry" type="checkbox"> Inject a payment retry on every order</label>
+            <p class="form-help">Stock is reserved synchronously. If inventory runs out, each order failure is reported independently.</p>
+            <button class="button primary" type="submit">Place orders</button>
+          </form>
+        </div>
+
+        <div id="workload-result" class="panel">
+          <div class="panel-heading"><div><h2>Last workload result</h2><p>Accepted and rejected work from the most recent submission</p></div></div>
+          <div id="workload-result-body" class="empty-state">Run a workload to see evidence here.</div>
+        </div>
+
+        <div class="two-column">
+          <div class="panel">
+            <div class="panel-heading"><div><h2>Scenario library</h2><p>Reproduce common distributed-work incidents</p></div></div>
+            <div id="scenarios" class="scenario-grid"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-heading"><div><h2>Inventory</h2><p>Reserved by checkout before a job is submitted</p></div></div>
+            <div id="catalog" class="catalog-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-architecture" class="view">
+        <div class="page-heading">
+          <div><p class="eyebrow">APPLICATION DESIGN</p><h1>How ParcelFlow stays simple</h1><p class="subheading">A real application boundary with the engine owning distributed scheduling guarantees.</p></div>
+        </div>
+        <div class="explainer">
+          <span class="explainer-icon">i</span>
+          <div><strong>In plain English</strong><p>Imagine a restaurant. The app takes the order; SimplyDone4J is the kitchen manager who makes sure every ticket is cooked once, retried if the oven is busy, and never lost if a cook goes home. The app focuses on customers, not scheduling plumbing.</p></div>
+        </div>
+        <div id="architecture-content" class="architecture-grid"></div>
+        <div class="panel">
+          <h2>What the library removes</h2>
+          <div class="comparison">
+            <div><b>Without SimplyDone4J</b><span>Custom Redis scripts</span><span>Crash recovery and lease fencing</span><span>Retry backoff and DLQ state</span><span>Duplicate submission locks</span><span>Worker pool and lease recovery</span></div>
+            <div class="with-library"><b>With SimplyDone4J</b><span>One JobSubmissionService call</span><span>Safe distributed execution</span><span>Declarative retry policy</span><span>Producer + idempotency key</span><span>Built-in retries and DLQ recovery</span></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="order-dialog">
+    <form method="dialog" id="order-form">
+      <div class="modal-heading"><div><p class="eyebrow">CHECKOUT</p><h2>Place an order</h2></div><button type="button" class="close" data-close="order-dialog">&times;</button></div>
+      <label>Customer name<input id="customer" maxlength="80" required value="Asha Patel"></label>
+      <label>Product<select id="sku" required></select></label>
+      <div class="form-row">
+        <label>Quantity<input id="quantity" type="number" min="1" max="20" value="2" required></label>
+        <label>Fulfillment lane<select id="priority"><option>HIGH</option><option selected>NORMAL</option><option>LOW</option></select></label>
+      </div>
+      <label class="checkbox"><input id="simulate-retry" type="checkbox"> Simulate a payment gateway retry</label>
+      <p id="order-preview" class="order-preview">Choose a product to continue.</p>
+      <p class="form-help">Stock is reserved synchronously. Fulfillment runs asynchronously through SimplyDone4J.</p>
+      <div class="modal-actions"><button type="button" class="button secondary" data-close="order-dialog">Cancel</button><button id="submit-order" type="submit" class="button primary">Place order</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="order-detail-dialog" class="dialog-wide">
+    <div class="modal-heading"><div><p class="eyebrow">ORDER DETAIL</p></div><button type="button" id="close-detail" class="close">&times;</button></div>
+    <div id="order-detail-body"></div>
+  </dialog>
+
+  <dialog id="job-detail-dialog" class="dialog-wide">
+    <div class="modal-heading"><div><p class="eyebrow">JOB INSPECTOR</p></div><button type="button" id="close-job-detail" class="close">&times;</button></div>
+    <div id="job-detail-body"></div>
+  </dialog>
+
+  <dialog id="help-dialog" class="dialog-wide">
+    <div class="modal-heading">
+      <div><p class="eyebrow">PLAIN-ENGLISH GUIDE</p><h2>What am I looking at?</h2></div>
+      <button type="button" class="close" data-close="help-dialog">&times;</button>
+    </div>
+    <p class="muted">This demo shows how a normal shopping application hands slow or unreliable work to a background engine. Here is the whole vocabulary in one place.</p>
+    <div class="glossary-grid">
+      <div class="glossary-item"><b>Order</b><span>What the customer wants. It is saved first, then the background work begins.</span></div>
+      <div class="glossary-item"><b>Job</b><span>A work ticket for the engine, such as &ldquo;charge this payment&rdquo; or &ldquo;pack this parcel&rdquo;.</span></div>
+      <div class="glossary-item"><b>Queue</b><span>A waiting line. HIGH-priority tickets are checked more often than LOW-priority tickets.</span></div>
+      <div class="glossary-item"><b>Worker</b><span>A slot that actually runs the job. If all workers are busy, work waits safely in the queue.</span></div>
+      <div class="glossary-item"><b>Retry</b><span>A second chance after a temporary failure, such as a payment gateway being slow.</span></div>
+      <div class="glossary-item"><b>Dead letter</b><span>A job that used all of its retries. A person can replay it or discard it.</span></div>
+      <div class="glossary-item"><b>Idempotency key</b><span>A unique label that prevents the same action from being accepted twice.</span></div>
+      <div class="glossary-item"><b>Lease</b><span>A time-limited claim on a job. If a worker disappears, the lease expires and the job can be recovered.</span></div>
+    </div>
+    <div class="help-steps">
+      <b>Try this two-minute tour</b>
+      <span>1. Place an order on the Overview page.</span>
+      <span>2. Open Jobs and click the new ticket to see its history.</span>
+      <span>3. Run the DLQ scenario in Workload lab, then replay it from Dead letters.</span>
+    </div>
+    <div class="modal-actions"><button type="button" class="button primary" data-close="help-dialog">Got it</button></div>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <div class="modal-heading"><div><p class="eyebrow">CONFIRM ACTION</p><h2 id="confirm-title">Are you sure?</h2></div></div>
+    <p id="confirm-message"></p>
+    <div class="modal-actions"><button type="button" id="confirm-cancel" class="button secondary">Cancel</button><button type="button" id="confirm-ok" class="button danger">Confirm</button></div>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+  <script type="module" src="/js/dashboard.js"></script>
+</body>
+</html>

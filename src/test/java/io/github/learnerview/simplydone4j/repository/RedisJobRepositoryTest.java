@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.HashOperations;
@@ -48,6 +49,12 @@ class RedisJobRepositoryTest {
         lenient().when(redis.opsForHash()).thenReturn(hashOps);
         lenient().when(redis.opsForZSet()).thenReturn(zSetOps);
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
+        lenient().when(redis.exec()).thenReturn(List.of(1L));
+        lenient().doAnswer(inv -> {
+            @SuppressWarnings("rawtypes")
+            SessionCallback callback = inv.getArgument(0);
+            return callback.execute(redis);
+        }).when(redis).execute(any(SessionCallback.class));
 
         lenient().doAnswer(inv -> {
             String key = inv.getArgument(0);

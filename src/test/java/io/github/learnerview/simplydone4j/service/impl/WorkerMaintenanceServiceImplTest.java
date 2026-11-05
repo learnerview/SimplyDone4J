@@ -51,12 +51,90 @@ class WorkerMaintenanceServiceImplTest {
 
             when(jobRepo.findReadyToRun(eq(JobStatus.RETRY_SCHEDULED), any(Instant.class), eq(100)))
                     .thenReturn(List.of(dueJob));
+            when(jobRepo.transitionStatusIfCurrent("retry-1",
+                    JobStatus.RETRY_SCHEDULED, JobStatus.QUEUED)).thenReturn(true);
+            when(queueRepo.enqueueIfUnderCapacity(anyString(), any(), anyLong(), anyLong()))
+                    .thenReturn(true);
 
             service.promoteRetries();
 
-            verify(jobRepo).save(dueJob);
-            verify(queueRepo).enqueue(dueJob.getId(), dueJob.getPriority(),
-                    dueJob.getNextRunAt().toEpochMilli());
+            verify(jobRepo).transitionStatusIfCurrent("retry-1",
+                    JobStatus.RETRY_SCHEDULED, JobStatus.QUEUED);
+            verify(jobRepo, never()).save(any());
+            verify(queueRepo).enqueueIfUnderCapacity(dueJob.getId(), dueJob.getPriority(),
+                    dueJob.getNextRunAt().toEpochMilli(), props.getQueue().getMaxDepth());
+        }
+
+        @Test
+        void shouldNotEnqueueWhenAnotherPromoterWonTheTransition() {
+            JobEntity dueJob = JobEntity.builder()
+                    .id("retry-race")
+                    .jobType("test")
+                    .status(JobStatus.RETRY_SCHEDULED)
+                    .priority(JobPriority.NORMAL)
+                    .nextRunAt(Instant.now().minusSeconds(5))
+                    .build();
+
+            when(jobRepo.findReadyToRun(eq(JobStatus.RETRY_SCHEDULED), any(Instant.class), eq(100)))
+                    .thenReturn(List.of(dueJob));
+            when(jobRepo.transitionStatusIfCurrent("retry-race",
+                    JobStatus.RETRY_SCHEDULED, JobStatus.QUEUED)).thenReturn(false);
+
+            service.promoteRetries();
+
+            verify(queueRepo, never()).enqueueIfUnderCapacity(anyString(), any(), anyLong(), anyLong());
+        }
+
+        @Test
+        void shouldRestoreRetryStateWhenQueueEnqueueFails() {
+            JobEntity dueJob = JobEntity.builder()
+                    .id("retry-enqueue-failure")
+                    .jobType("test")
+                    .status(JobStatus.RETRY_SCHEDULED)
+                    .priority(JobPriority.NORMAL)
+                    .nextRunAt(Instant.now().minusSeconds(5))
+                    .build();
+
+            when(jobRepo.findReadyToRun(eq(JobStatus.RETRY_SCHEDULED), any(Instant.class), eq(100)))
+                    .thenReturn(List.of(dueJob));
+            when(jobRepo.transitionStatusIfCurrent("retry-enqueue-failure",
+                    JobStatus.RETRY_SCHEDULED, JobStatus.QUEUED)).thenReturn(true);
+            doThrow(new RuntimeException("redis unavailable"))
+                    .when(queueRepo).enqueueIfUnderCapacity(anyString(), any(), anyLong(), anyLong());
+            when(jobRepo.transitionStatusIfCurrent("retry-enqueue-failure",
+                    JobStatus.QUEUED, JobStatus.RETRY_SCHEDULED)).thenReturn(true);
+
+            service.promoteRetries();
+
+            verify(jobRepo).transitionStatusIfCurrent("retry-enqueue-failure",
+                    JobStatus.QUEUED, JobStatus.RETRY_SCHEDULED);
+        }
+
+        @Test
+        void shouldDeferRetryWhenQueueIsAtMaxDepth() {
+            JobEntity dueJob = JobEntity.builder()
+                    .id("retry-full")
+                    .jobType("test")
+                    .status(JobStatus.RETRY_SCHEDULED)
+                    .priority(JobPriority.NORMAL)
+                    .nextRunAt(Instant.now().minusSeconds(5))
+                    .build();
+
+            when(jobRepo.findReadyToRun(eq(JobStatus.RETRY_SCHEDULED), any(Instant.class), eq(100)))
+                    .thenReturn(List.of(dueJob));
+            when(jobRepo.transitionStatusIfCurrent("retry-full",
+                    JobStatus.RETRY_SCHEDULED, JobStatus.QUEUED)).thenReturn(true);
+            when(queueRepo.enqueueIfUnderCapacity(eq("retry-full"), eq(JobPriority.NORMAL),
+                    anyLong(), eq(props.getQueue().getMaxDepth()))).thenReturn(false);
+            when(jobRepo.transitionStatusIfCurrent("retry-full",
+                    JobStatus.QUEUED, JobStatus.RETRY_SCHEDULED)).thenReturn(true);
+
+            service.promoteRetries();
+
+            verify(jobRepo).transitionStatusIfCurrent("retry-full",
+                    JobStatus.QUEUED, JobStatus.RETRY_SCHEDULED);
+            verify(queueRepo).enqueueIfUnderCapacity(eq("retry-full"), eq(JobPriority.NORMAL),
+                    anyLong(), eq(props.getQueue().getMaxDepth()));
         }
 
         @Test
@@ -75,7 +153,7 @@ class WorkerMaintenanceServiceImplTest {
             service.promoteRetries();
 
             verify(jobRepo, never()).save(any());
-            verify(queueRepo, never()).enqueue(anyString(), any(), anyLong());
+            verify(queueRepo, never()).enqueueIfUnderCapacity(anyString(), any(), anyLong(), anyLong());
         }
 
         @Test
@@ -94,7 +172,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.promoteRetries();
 
-            verify(queueRepo, never()).enqueue(anyString(), any(), anyLong());
+            verify(queueRepo, never()).enqueueIfUnderCapacity(anyString(), any(), anyLong(), anyLong());
         }
     }
 
@@ -118,7 +196,8 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService).handleFailure(expiredJob, "Worker lease expired", 0L);
+            verify(retryService).handleFailureIfLeaseHeldOverdue(eq(expiredJob), eq("old-token"),
+                    any(Instant.class), eq("Worker lease expired"), eq(0L));
         }
 
         @Test
@@ -127,7 +206,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, never()).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, never()).handleFailureIfLeaseHeldOverdue(any(), anyString(), any(Instant.class), anyString(), anyLong());
         }
 
         @Test
@@ -145,7 +224,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, times(3)).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, times(3)).handleFailureIfLeaseHeldOverdue(any(), anyString(), any(Instant.class), anyString(), anyLong());
         }
 
         @Test
@@ -172,7 +251,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, never()).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, never()).handleFailureIfLeaseHeldOverdue(any(), anyString(), any(Instant.class), anyString(), anyLong());
         }
 
         @Test
@@ -191,7 +270,7 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, never()).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, never()).handleFailureIfLeaseHeldOverdue(any(), anyString(), any(Instant.class), anyString(), anyLong());
         }
 
         @Test
@@ -201,7 +280,74 @@ class WorkerMaintenanceServiceImplTest {
 
             service.recoverExpiredLeases();
 
-            verify(retryService, never()).handleFailure(any(), anyString(), anyLong());
+            verify(retryService, never()).handleFailureIfLeaseHeldOverdue(any(), anyString(), any(Instant.class), anyString(), anyLong());
+        }
+    }
+
+    @Nested
+    class OrphanReconciliation {
+        @Test
+        void shouldRequeueAQueuedJobWithNoQueueEntry() {
+            JobEntity orphan = JobEntity.builder()
+                    .id("orphan-1")
+                    .jobType("test")
+                    .status(JobStatus.QUEUED)
+                    .priority(JobPriority.HIGH)
+                    .nextRunAt(Instant.now().minusSeconds(30))
+                    .updatedAt(Instant.now().minusSeconds(30))
+                    .build();
+
+            when(jobRepo.findReadyToRun(eq(JobStatus.QUEUED), any(Instant.class), eq(200)))
+                    .thenReturn(List.of(orphan));
+            when(queueRepo.contains("orphan-1", JobPriority.HIGH)).thenReturn(false);
+            when(queueRepo.enqueueIfUnderCapacity("orphan-1", JobPriority.HIGH,
+                    orphan.getNextRunAt().toEpochMilli(), props.getQueue().getMaxDepth()))
+                    .thenReturn(true);
+
+            service.reconcileOrphanedQueuedJobs();
+
+            verify(queueRepo).enqueueIfUnderCapacity("orphan-1", JobPriority.HIGH,
+                    orphan.getNextRunAt().toEpochMilli(), props.getQueue().getMaxDepth());
+        }
+
+        @Test
+        void shouldNotRequeueAJobThatStillHasAQueueEntry() {
+            JobEntity queued = JobEntity.builder()
+                    .id("queued-1")
+                    .jobType("test")
+                    .status(JobStatus.QUEUED)
+                    .priority(JobPriority.NORMAL)
+                    .nextRunAt(Instant.now().minusSeconds(30))
+                    .updatedAt(Instant.now().minusSeconds(30))
+                    .build();
+
+            when(jobRepo.findReadyToRun(eq(JobStatus.QUEUED), any(Instant.class), eq(200)))
+                    .thenReturn(List.of(queued));
+            when(queueRepo.contains("queued-1", JobPriority.NORMAL)).thenReturn(true);
+
+            service.reconcileOrphanedQueuedJobs();
+
+            verify(queueRepo, never()).enqueueIfUnderCapacity(anyString(), any(), anyLong(), anyLong());
+        }
+
+        @Test
+        void shouldLeaveANewlyPersistedJobAloneDuringTheGracePeriod() {
+            JobEntity fresh = JobEntity.builder()
+                    .id("fresh-1")
+                    .jobType("test")
+                    .status(JobStatus.QUEUED)
+                    .priority(JobPriority.NORMAL)
+                    .nextRunAt(Instant.now())
+                    .updatedAt(Instant.now())
+                    .build();
+
+            when(jobRepo.findReadyToRun(eq(JobStatus.QUEUED), any(Instant.class), eq(200)))
+                    .thenReturn(List.of(fresh));
+
+            service.reconcileOrphanedQueuedJobs();
+
+            verify(queueRepo, never()).contains(anyString(), any());
+            verify(queueRepo, never()).enqueueIfUnderCapacity(anyString(), any(), anyLong(), anyLong());
         }
     }
 }

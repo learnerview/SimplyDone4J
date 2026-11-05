@@ -73,26 +73,25 @@ class RedisQueueRepositoryTest {
     class ClaimNextReady {
         @Test
         void shouldClaimNextReadyJobViaTransaction() {
-            when(redis.execute(any(SessionCallback.class))).thenReturn(Optional.of("job-1"));
+            when(redis.execute(any(SessionCallback.class))).thenReturn(List.of("job-1"));
 
-            Optional<String> result = repo.claimNextReady(JobPriority.NORMAL);
-            assertTrue(result.isPresent());
-            assertEquals("job-1", result.get());
+            List<String> result = repo.claimReady(JobPriority.NORMAL, 1);
+            assertEquals(List.of("job-1"), result);
         }
 
         @Test
         void shouldReturnEmptyWhenNoJobsReady() {
-            when(redis.execute(any(SessionCallback.class))).thenReturn(Optional.empty());
+            when(redis.execute(any(SessionCallback.class))).thenReturn(List.of());
 
-            Optional<String> result = repo.claimNextReady(JobPriority.LOW);
-            assertFalse(result.isPresent());
+            List<String> result = repo.claimReady(JobPriority.LOW, 1);
+            assertTrue(result.isEmpty());
         }
 
         @Test
         void shouldHandleExceptionDuringClaim() {
             when(redis.execute(any(SessionCallback.class))).thenThrow(new DataAccessException("Redis tx failed") {});
 
-            assertThrows(DataAccessException.class, () -> repo.claimNextReady(JobPriority.HIGH));
+            assertThrows(DataAccessException.class, () -> repo.claimReady(JobPriority.HIGH, 1));
         }
     }
 

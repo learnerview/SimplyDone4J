@@ -16,7 +16,6 @@ public final class JobResponse {
     private final Instant visibleAt;
     private final String leaseOwner;
     private final Integer timeoutSeconds;
-    private final String callbackUrl;
     private final Instant startedAt;
     private final Instant completedAt;
     private final int attemptCount;
@@ -37,7 +36,6 @@ public final class JobResponse {
         this.visibleAt = builder.visibleAt;
         this.leaseOwner = builder.leaseOwner;
         this.timeoutSeconds = builder.timeoutSeconds;
-        this.callbackUrl = builder.callbackUrl;
         this.startedAt = builder.startedAt;
         this.completedAt = builder.completedAt;
         this.attemptCount = builder.attemptCount;
@@ -58,7 +56,6 @@ public final class JobResponse {
     public Instant getVisibleAt() { return visibleAt; }
     public String getLeaseOwner() { return leaseOwner; }
     public Integer getTimeoutSeconds() { return timeoutSeconds; }
-    public String getCallbackUrl() { return callbackUrl; }
     public Instant getStartedAt() { return startedAt; }
     public Instant getCompletedAt() { return completedAt; }
     public int getAttemptCount() { return attemptCount; }
@@ -81,7 +78,6 @@ public final class JobResponse {
         private Instant visibleAt;
         private String leaseOwner;
         private Integer timeoutSeconds;
-        private String callbackUrl;
         private Instant startedAt;
         private Instant completedAt;
         private int attemptCount;
@@ -101,7 +97,6 @@ public final class JobResponse {
         public Builder visibleAt(Instant visibleAt) { this.visibleAt = visibleAt; return this; }
         public Builder leaseOwner(String leaseOwner) { this.leaseOwner = leaseOwner; return this; }
         public Builder timeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; return this; }
-        public Builder callbackUrl(String callbackUrl) { this.callbackUrl = callbackUrl; return this; }
         public Builder startedAt(Instant startedAt) { this.startedAt = startedAt; return this; }
         public Builder completedAt(Instant completedAt) { this.completedAt = completedAt; return this; }
         public Builder attemptCount(int attemptCount) { this.attemptCount = attemptCount; return this; }
