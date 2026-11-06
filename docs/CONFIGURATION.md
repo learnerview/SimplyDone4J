@@ -61,7 +61,7 @@ All properties are under the `simplydone4j.*` prefix and support Spring Boot's r
 |---|---|---|
 | `executor.core-pool-size` | `4` | Worker thread pool core size |
 | `executor.max-pool-size` | `8` | Worker thread pool max size |
-| `executor.queue-capacity` | `100` | Retained for compatibility; dispatch uses direct handoff so a task never waits in the executor queue while holding a lease |
+| `executor.queue-capacity` | `100` | Ignored by auto-configuration; kept for binding compatibility. Dispatch uses direct handoff so a claimed task never waits in the executor queue. Changing this property has no effect on the auto-configured executor. |
 | `executor.keep-alive-seconds` | `60` | Idle thread keep-alive |
 | `executor.default-timeout-seconds` | `30` | Default handler execution timeout |
 | `executor.await-termination-seconds` | `30` | Graceful shutdown wait |

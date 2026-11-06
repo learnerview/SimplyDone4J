@@ -219,7 +219,7 @@
       "name": "simplydone4j.executor.queue-capacity",
       "type": "java.lang.Integer",
       "defaultValue": 100,
-      "description": "Retained for compatibility. Dispatch hands work directly to a worker thread so a queued task cannot let its lease expire before execution."
+      "description": "Ignored by auto-configuration; retained for binding compatibility. Dispatch hands work directly to a worker thread so a queued task cannot let its lease expire before execution."
     },
     {
       "name": "simplydone4j.executor.keep-alive-seconds",

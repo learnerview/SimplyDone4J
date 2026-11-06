@@ -255,7 +255,9 @@ prior effects.
 - Set `scheduler.enabled=false` on instances that should only submit jobs.
 - Leave enough time in the shutdown grace period for handlers that are allowed to
   finish. The executor waits up to `executor.await-termination-seconds` (default
-  30s) for in-flight work.
+  30s) for in-flight work. The auto-configured executor depends on the timeout
+  scheduler, so the executor shuts down first and watchdog enforcement and lease
+  renewal remain available while in-flight jobs drain.
 - Do not change the internal serialization shape while old job records still
   exist. The internal `simplyDoneObjectMapper` keeps application-wide Jackson
   settings out of the stored format, but changing field names makes existing

@@ -26,7 +26,7 @@ mvn -B -f demo/pom.xml clean verify
 
 Observed:
 
-- Library suite: 204 tests, 0 failures, 0 errors, 0 skipped.
+- Library suite: 207 tests, 0 failures, 0 errors, 0 skipped.
 - Load test: 1 test, 0 failures, 0 errors, 0 skipped (run separately).
 - Demo: 15 tests, 0 failures, 0 errors, 0 skipped.
 - Redis-backed tests executed: `RedisJobRepositoryWriteSemanticsRealRedisTest`,
@@ -35,6 +35,10 @@ Observed:
   `RetryPromotionRaceRealRedisTest`.
 - Lease renewal and fencing unit tests (`LeaseRenewerTest`, `LeaseFencingTest`)
   also ran; they use mocked repositories rather than a live Redis server.
+
+`JobExecutorServiceImplTest` covers the watchdog/completion handoff with a blocking
+interrupt, and `SimplyDoneAutoConfigurationTest` checks that the executor depends on
+the timeout scheduler. Broader shutdown interleavings are not exhaustively covered.
 
 Run the same suite against your own Redis instance:
 

@@ -84,6 +84,21 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
      * outer tasks, each waiting on an inner task that had no thread left to run.
      */
     private void executeWithTimeout(JobEntity job, int timeoutSeconds) {
+        try {
+            executeWithTimeoutInternal(job, timeoutSeconds);
+        } finally {
+            // Release even if the handler throws an Error. Otherwise the permit leaks and
+            // the scheduler can no longer admit work for this instance.
+            releaseCapacity();
+            try {
+                signal.signal();
+            } catch (RuntimeException e) {
+                log.warn("Could not signal the scheduler after job {}", job.getId(), e);
+            }
+        }
+    }
+
+    private void executeWithTimeoutInternal(JobEntity job, int timeoutSeconds) {
         long start = System.currentTimeMillis();
         Instant executionStart = Instant.now();
         // Clear a stale interrupt left by a handler that ignored its previous timeout.
@@ -93,6 +108,7 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
 
         AtomicBoolean timedOut = new AtomicBoolean(false);
         AtomicBoolean completed = new AtomicBoolean(false);
+        Object completionLock = new Object();
         Thread worker = Thread.currentThread();
         ScheduledFuture<?> watchdog = null;
         String result = null;
@@ -101,9 +117,12 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
             if (leaseRenewer != null) leaseRenewer.start(job.getId(), leaseToken);
             if (timeoutScheduler != null) {
                 watchdog = timeoutScheduler.schedule(() -> {
-                    if (completed.compareAndSet(false, true)) {
-                        timedOut.set(true);
-                        worker.interrupt();
+                    synchronized (completionLock) {
+                        if (!completed.get()) {
+                            completed.set(true);
+                            timedOut.set(true);
+                            worker.interrupt();
+                        }
                     }
                 }, timeoutSeconds, TimeUnit.SECONDS);
             }
@@ -111,21 +130,21 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
             try {
                 JobHandler handler = handlerRegistry.getHandler(job.getJobType());
                 result = handler.handle(JobContext.from(job, timeoutSeconds, executionStart));
-                completed.set(true);
+                markCompleted(completionLock, completed);
             } catch (InterruptedException e) {
-                completed.set(true);
+                markCompleted(completionLock, completed);
                 if (!timedOut.get()) {
                     failure = e;
                     Thread.currentThread().interrupt();
                 }
             } catch (Exception e) {
-                completed.set(true);
+                markCompleted(completionLock, completed);
                 failure = e;
             }
         } catch (Exception e) {
             failure = e;
         } finally {
-            completed.set(true);
+            markCompleted(completionLock, completed);
             if (watchdog != null) watchdog.cancel(false);
             try {
                 if (leaseRenewer != null) leaseRenewer.stop(job.getId(), leaseToken);
@@ -153,13 +172,12 @@ public final class JobExecutorServiceImpl implements JobExecutorService {
             // job once the lease expires; at-least-once execution still applies.
             log.error("Job {} finished but its outcome could not be recorded; "
                     + "the lease reaper will recover it", job.getId(), e);
-        } finally {
-            // Release only after the outcome write and its side channels have completed.
-            // Releasing earlier lets a CallerRunsPolicy task grow the worker thread and let
-            // the scheduler thread claim more work while the previous terminal write is
-            // still in flight.
-            releaseCapacity();
-            signal.signal();
+        }
+    }
+
+    private static void markCompleted(Object completionLock, AtomicBoolean completed) {
+        synchronized (completionLock) {
+            completed.set(true);
         }
     }
 

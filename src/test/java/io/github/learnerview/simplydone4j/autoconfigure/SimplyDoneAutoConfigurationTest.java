@@ -84,6 +84,16 @@ class SimplyDoneAutoConfigurationTest {
     }
 
     @Test
+    void shouldMakeTheJobExecutorDependOnTheTimeoutScheduler() {
+        contextRunner.run(context -> {
+            assertThat(context.getBeanFactory()
+                    .getBeanDefinition("jobTaskExecutor").getDependsOn())
+                    .contains("jobTimeoutScheduler");
+            assertThat(context).hasBean("jobTimeoutScheduler");
+        });
+    }
+
+    @Test
     void shouldDisableSchedulerWhenPropertyFalse() {
         contextRunner
                 .withPropertyValues("simplydone4j.scheduler.enabled=false")

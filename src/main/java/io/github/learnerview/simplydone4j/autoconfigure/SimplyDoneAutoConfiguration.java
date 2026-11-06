@@ -46,6 +46,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -97,6 +98,7 @@ public final class SimplyDoneAutoConfiguration {
     }
 
     @Bean(name = "jobTaskExecutor")
+    @DependsOn("jobTimeoutScheduler")
     @ConditionalOnMissingBean(name = "jobTaskExecutor")
     public ThreadPoolTaskExecutor jobTaskExecutor(SimplyDoneProperties props) {
         Executor exec = props.getExecutor();

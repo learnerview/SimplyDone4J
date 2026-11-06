@@ -12,6 +12,9 @@ submission, weighted priority queues, retries, idempotency, lease-based
 execution, dead-letter recovery, and execution history to a Spring Boot
 application that already uses Redis.
 
+SimplyDone4J provides the execution engine. Job handlers, business logic, and the
+idempotency of external side effects remain the application's responsibility.
+
 This repository contains the `3.0.0` source line, built and tested with Java 21
 and Spring Boot `4.1.2`. For a published release, use the version listed on
 [Maven Central](https://central.sonatype.com/artifact/io.github.learnerview/simplydone4j-spring-boot-starter).
@@ -69,7 +72,7 @@ spring:
       url: redis://localhost:6379
 ```
 
-**4. Define a handler and submit your first job:**
+**5. Define a handler and submit your first job:**
 
 ```java
 import io.github.learnerview.simplydone4j.dto.JobSubmissionRequest;
@@ -117,7 +120,7 @@ public class MyApplication {
 The handler result is stored with the job. Throw an exception from a handler to
 trigger the configured retry policy.
 
-**5. Scheduling is enabled by default.** To run a submission-only node:
+**6. Scheduling is enabled by default.** To run a submission-only node:
 
 ```bash
 java -jar my-app.jar --simplydone4j.scheduler.enabled=false
@@ -202,7 +205,7 @@ Handlers that change another system must be idempotent or use an outbox. See
 - **Dead-letter queue** — jobs that exhaust retries move to `DLQ`
 - **DLQ recovery** — list, count, replay, or discard through `DeadLetterService`
 - **Engine status** — dependency-free `EngineStatusService` reports Redis reachability, loop state, queue depth, and worker capacity
-- **Graceful shutdown** — in-flight jobs may finish within `executor.await-termination-seconds`
+- **Graceful shutdown** — the executor waits for in-flight jobs within `executor.await-termination-seconds` while the timeout scheduler remains available for watchdog enforcement and lease renewal
 - **Auto-configuration** — components are registered from the starter dependency
 - **Sentinel and Cluster support** — Cluster requires a hash-tagged `key-prefix`
 

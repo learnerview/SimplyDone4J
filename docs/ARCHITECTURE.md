@@ -326,7 +326,9 @@ work must implement a cooperative checkpoint in the handler, as ParcelFlow does.
 `CallerRunsPolicy` means a saturated executor can run a task on the scheduler
 thread, providing backpressure without dropping work. Graceful shutdown waits for
 tasks to complete (`waitForTasksToCompleteOnShutdown=true`) for up to
-`executor.await-termination-seconds`.
+`executor.await-termination-seconds`. The timeout scheduler is created before the
+executor and destroyed after it, so watchdog enforcement and lease renewal remain
+available while in-flight tasks drain.
 
 ## Failure Model
 

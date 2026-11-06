@@ -335,6 +335,97 @@ class JobExecutorServiceImplTest {
     }
 
     @Test
+    void shouldReleaseCapacityWhenTheHandlerThrowsAnError() throws Exception {
+        JobHandler handler = mock(JobHandler.class);
+        handlerRegistry.register("test", handler);
+        when(handler.handle(any())).thenThrow(new AssertionError("fatal handler error"));
+        JobEntity job = job("job-1", "tok-1");
+        WorkerCapacity capacity = new WorkerCapacity(1);
+        assertTrue(capacity.tryAcquire(), "precondition: the scheduler holds one in-flight permit");
+        JobSignal signal = mock(JobSignal.class);
+        CountDownLatch signalled = new CountDownLatch(1);
+        doAnswer(inv -> {
+            signalled.countDown();
+            return null;
+        }).when(signal).signal();
+
+        new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher,
+                executor, 30, capacity, signal, null, null).execute(job);
+
+        assertTrue(signalled.await(5, TimeUnit.SECONDS),
+                "an Error must not bypass capacity release and scheduling");
+        assertEquals(1, capacity.availablePermits(),
+                "an Error must not leak the in-flight permit");
+        verify(retryService, never())
+                .handleFailureIfLeaseHeld(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void shouldNotFinishWhileWatchdogIsStillInterruptingTheWorker() throws Exception {
+        JobHandler handler = mock(JobHandler.class);
+        handlerRegistry.register("test", handler);
+        CountDownLatch handlerStarted = new CountDownLatch(1);
+        CountDownLatch allowHandlerReturn = new CountDownLatch(1);
+        when(handler.handle(any())).thenAnswer(inv -> {
+            handlerStarted.countDown();
+            assertTrue(allowHandlerReturn.await(10, TimeUnit.SECONDS));
+            return "done";
+        });
+
+        ThreadPoolTaskExecutor singleThread = new ThreadPoolTaskExecutor();
+        singleThread.setCorePoolSize(1);
+        singleThread.setMaxPoolSize(1);
+        singleThread.setQueueCapacity(0);
+        singleThread.setThreadNamePrefix("blocking-worker-");
+        BlockingInterruptThread[] worker = new BlockingInterruptThread[1];
+        singleThread.setThreadFactory(r -> {
+            BlockingInterruptThread thread = new BlockingInterruptThread(r);
+            worker[0] = thread;
+            return thread;
+        });
+        singleThread.initialize();
+
+        ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor();
+        try {
+            JobEntity job = job("job-1", "tok-1");
+            job.setTimeoutSeconds(1);
+            WorkerCapacity capacity = new WorkerCapacity(1);
+            assertTrue(capacity.tryAcquire(), "precondition: the scheduler holds one in-flight permit");
+            JobSignal signal = mock(JobSignal.class);
+            CountDownLatch signalled = new CountDownLatch(1);
+            doAnswer(inv -> {
+                signalled.countDown();
+                return null;
+            }).when(signal).signal();
+            when(retryService.handleFailureIfLeaseHeld(any(), eq("tok-1"), anyString(), anyLong()))
+                    .thenReturn("RETRY_SCHEDULED");
+
+            new JobExecutorServiceImpl(jobRepo, retryService, handlerRegistry, eventPublisher,
+                    singleThread, 30, capacity, signal, null, timeoutScheduler).execute(job);
+
+            assertTrue(handlerStarted.await(5, TimeUnit.SECONDS), "the handler must start");
+            assertNotNull(worker[0]);
+            assertTrue(worker[0].interruptEntered.await(5, TimeUnit.SECONDS),
+                    "the watchdog must reach the interrupt handoff");
+
+            allowHandlerReturn.countDown();
+            assertFalse(signalled.await(500, TimeUnit.MILLISECONDS),
+                    "completion must wait for the watchdog interrupt handoff to finish");
+
+            worker[0].allowInterrupt.countDown();
+            assertTrue(signalled.await(5, TimeUnit.SECONDS),
+                    "the job must finish after the watchdog handoff completes");
+            assertEquals(1, capacity.availablePermits(),
+                    "the timed-out job must release its in-flight permit");
+        } finally {
+            allowHandlerReturn.countDown();
+            if (worker[0] != null) worker[0].allowInterrupt.countDown();
+            timeoutScheduler.shutdownNow();
+            singleThread.shutdown();
+        }
+    }
+
+    @Test
     void shouldReleaseCapacityAndSignalWhenExecutionFinishes() throws Exception {
         JobHandler handler = mock(JobHandler.class);
         handlerRegistry.register("test", handler);
@@ -369,5 +460,25 @@ class JobExecutorServiceImplTest {
                 .maxAttempts(3)
                 .leaseToken(leaseToken)
                 .build();
+    }
+
+    private static final class BlockingInterruptThread extends Thread {
+        private final CountDownLatch interruptEntered = new CountDownLatch(1);
+        private final CountDownLatch allowInterrupt = new CountDownLatch(1);
+
+        private BlockingInterruptThread(Runnable target) {
+            super(target);
+        }
+
+        @Override
+        public void interrupt() {
+            interruptEntered.countDown();
+            try {
+                allowInterrupt.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            super.interrupt();
+        }
     }
 }
